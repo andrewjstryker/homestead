@@ -1,0 +1,40 @@
+#!/bin/sh
+# Transfer one namespace; append rsync's MD5 records only after it succeeds.
+set -eu
+receipt=${1:?receipt required}
+root=${2:?destination root required}
+destdir=$3
+source=${4:?source required}
+shift 4
+: "${RSYNC:=rsync}"
+: "${DRY_RUN:=}"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+tab=$(printf '\t')
+status=0
+# The caller already supplies -i; repeating it includes unchanged files.
+"$RSYNC" "$@" --checksum-choice=md5 --itemize-changes \
+    --out-format="homestead:${tab}%i${tab}%C${tab}%n" \
+    "$source" "${destdir}${root}/" >"$work/output" || status=$?
+# Keep normal itemized output visible without exposing the receipt format.
+awk -F '\t' '$1 == "homestead:" { print $2 " " $4; next } { print }' "$work/output"
+[ "$status" -eq 0 ] || exit "$status"
+[ -z "$DRY_RUN" ] || exit 0
+
+# Only regular files enter receipts. Rsync handles vendored link dereferencing.
+# Reject unrepresentable names instead of recording rsync's escaped spelling.
+HOMESTEAD_DEST_ROOT=$root awk -F '\t' '
+    $1 == "homestead:" && substr($2, 2, 1) == "f" {
+        if (NF != 4 || length($3) != 32 || $3 ~ /[^0-9a-f]/ ||
+            $4 == "" || $4 ~ /^\// || $4 ~ /(^|\/)\.\.(\/|$)/ ||
+            index($4, "\\#") || $4 ~ /[[:cntrl:]]/) {
+            print "transfer: invalid rsync receipt record" > "/dev/stderr"
+            failed = 1
+        } else {
+            print $3 "\t" ENVIRON["HOMESTEAD_DEST_ROOT"] "/" $4
+        }
+    }
+    END { exit failed }
+' "$work/output" >"$work/records"
+cat "$work/records" >> "$receipt"

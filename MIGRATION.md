@@ -47,3 +47,23 @@ records Neovim as a submodule; security is an ignored independent checkout.
 Keep `protocol/tests/concerns.sh` with the configuration collection: it exercises
 real applications and configuration, rather than Homestead's generic contract.
 Homestead retains only the portable lifecycle and collection fixture suites.
+
+## Receipt-based uninstall
+
+Install now appends rsync MD5/path records to `RECEIPT` (default:
+`.homestead/receipt` in the concern directory). Add `.homestead/` to consumer
+ignore rules. Existing installations have no receipt: run install once to
+record the current manifest, including unchanged files. This cannot recover
+paths already removed from the declaration.
+
+Uninstall no longer stages or checks rendering inputs. Consumer uninstall hooks
+must not assume generated files exist. Regular-file removal compares the latest
+recorded MD5, not executable status; mode-only modifications no longer prevent
+removal. Compatibility links still use the current Makefile declarations.
+The driver preflights `check-uninstall-tools`; concerns using a separate protocol
+implementation must provide it. `check-tools` now includes the `MD5SUM` checker.
+
+Ordering names now document runtime ownership: first concerns provide the shared
+floor, middle concerns contribute domain environment, and last concerns assemble
+it. No new build or install dependency is introduced. Homestead guarantees
+ordered contribution delivery; consumer tests own runtime evaluation.

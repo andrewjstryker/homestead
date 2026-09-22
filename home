@@ -157,7 +157,8 @@ concern_repos() {
 }
 
 # Configured first concerns, the stable middle, then configured last concerns.
-# Ordering is collection policy, never a dependency between concern repositories.
+# The ordering delivers runtime floor fragments before domain contributions.
+# It does not create a build or installation dependency between concerns.
 order_repos() {
 	all=$(cat)
 
@@ -561,11 +562,8 @@ cmd_apply() {
 }
 
 cmd_uninstall() {
-	# Uninstall compares installed bytes with the current effective manifest, so a
-	# composed last concern must be staged with the same selected inputs first.
-	preflight_tools stage
-	stage_before_last
-	fragments=$(env_fragments)
+	# Installation receipts outlive sources and stage; no fragment composition.
+	preflight_tools uninstall
 	recurse uninstall
 }
 

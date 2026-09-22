@@ -262,7 +262,7 @@ make --no-print-directory -C "${fixture}" stage
 test ! -e "${fixture}/stage/config/rogue.conf"
 
 # Preview and install use the same namespace transfers. Uninstall removes only
-# destinations whose bytes and executable declaration still match the manifest.
+# destinations whose bytes match the latest receipt, regardless of mode changes.
 preview=$(make --no-print-directory -C "${fixture}" preview DESTDIR="${test_root}")
 printf '%s\n' "${preview}" | grep -q 'static.conf'
 printf '%s\n' "${preview}" | grep -q 'vendor-example'
@@ -290,9 +290,9 @@ chmod u+x "${test_root}${HOME}/.config/static.conf"
 uninstall=$(make --no-print-directory -C "${fixture}" uninstall DESTDIR="${test_root}")
 printf '%s\n' "${uninstall}" | grep -q "left modified  ${test_root}${HOME}/.local/share/example"
 printf '%s\n' "${uninstall}" | grep -q "left modified  ${test_root}${HOME}/.local/share/vendor-example"
-printf '%s\n' "${uninstall}" | grep -q "left modified  ${test_root}${HOME}/.config/static.conf"
+printf '%s\n' "${uninstall}" | grep -q "removed ${test_root}${HOME}/.config/static.conf"
 test -f "${test_root}${HOME}/.local/share/example"
-test -f "${test_root}${HOME}/.config/static.conf"
+test ! -e "${test_root}${HOME}/.config/static.conf"
 test ! -L "${test_root}${HOME}/.static.conf"
 test ! -e "${test_root}${HOME}/.config/rendered.conf"
 test ! -e "${test_root}${HOME}/.config/claimed"

@@ -18,7 +18,7 @@ driver.
 | `install` | Stage, then install the complete manifest. |
 | `sync` | Reconcile optional live or network state; empty unless extended. |
 | `apply` | Driver only: install every selected concern, then sync every selected concern. |
-| `uninstall` | Remove links still owned and installed files still identical to the manifest. |
+| `uninstall` | Remove declared links still owned and regular files matching their latest receipt MD5. |
 | `clean` | Remove build artifacts, never installed paths. |
 | `check-tools` | Check every declared tool requirement without running a lifecycle phase. |
 | `test` | Driver-only: run a concern-owned `test` target when present. |
@@ -182,23 +182,57 @@ and reports and replaces different files. It preserves the declared executable
 distinction while removing group and world permissions. Vendored symlinks are
 installed as the regular files they resolve to.
 
-Uninstall is conservative and receipt-free. For each current manifest path:
+The current manifest is the installation declaration. The receipt is the
+historical record used to uninstall regular files. `RECEIPT` defaults to
+`${CURDIR}/.homestead/receipt`, outside `stage`, and `clean` preserves it. A
+relative override is resolved from the concern directory. Add `.homestead/` to
+the concern's Git ignore rules. For a staged installation, `DESTDIR` prefixes
+the absolute receipt location too, keeping staged and live histories separate.
+`show` reports the effective receipt location.
+
+For each successful namespace transfer, install appends records produced by
+rsync using `--checksum-choice=md5`, repeated `--itemize-changes`, and the `%C`
+checksum field. Unchanged files are included. Each record contains:
+
+```text
+md5<TAB>absolute-destination-without-DESTDIR
+```
+
+The file is created with private permissions. Paths must not contain control
+characters or require rsync's `\#ooo` filename escaping. Records represent
+regular files, including dereferenced vendored symlinks; directories are not
+owned by the receipt. Preview and dry-run installation do not create or append
+receipts. An empty successful installation creates an empty receipt.
+
+Appending preserves older destinations when declarations or namespace roots
+change. For repeated destinations, the latest record wins; a match against an
+older checksum is insufficient. The receipt remains after uninstall, so
+repeated uninstall is harmless. This is a sequential per-concern history;
+concurrent install/uninstall operations on the same receipt are unsupported.
+
+Uninstall validates and reads the receipt without staging, inspecting the
+manifest, or requiring rendering inputs and tools. For each latest record:
 
 - an absent destination is reported as not installed;
-- a regular file with identical bytes and executable status is removed; and
-- any different file, directory, or symlink is reported as modified and left
-  untouched.
+- a regular file with a matching MD5 is removed, regardless of permission changes;
+- a different file, directory, or replacement symlink is left untouched.
 
-Thus an application may modify installed data: preview makes the next overwrite
-visible, install restores the repository version, and uninstall will not remove
-the locally modified version. If a source is deleted before uninstall, prune
-also removes it from the current manifest; without an installation receipt the
-old destination is intentionally unknown and remains in place.
+`DESTDIR` prefixes recorded destinations during removal. Uninstall dry runs
+report matches without removing them or changing the receipt. A missing or
+malformed receipt fails before removal; deleting it loses regular-file
+uninstall capability. Source deletion and `clean` do not affect that capability.
+MD5 is used for content comparison, not authentication of receipt contents.
 
-Compatibility links adapt legacy application paths to canonical manifest
-destinations. Install creates a missing link, leaves the correct link alone,
-and refuses to replace anything else. Uninstall removes a link only while it
-still points to the declared destination.
+Rsync failure is reported without appending that invocation's records. Earlier
+successful namespace transfers remain recorded. A failing transfer can leave
+partial destination writes; there is no rollback or attempt to infer ownership
+of those writes. A later receipt-write failure likewise fails installation.
+
+Compatibility links remain owned by the Makefile declarations, separately
+from receipts. Install creates a missing link, leaves the correct link alone,
+and refuses to replace anything else. After processing regular files,
+uninstall removes a declared link only while it still points to its declared
+target. Removed or changed link declarations do not retain historical ownership.
 
 ## Wrapper Makefile interface
 
@@ -211,6 +245,8 @@ them when used:
 | --- | --- |
 | `PROTOCOL_MK` | Selected protocol file. |
 | `src`, `stage` | First-party source and generated roots; defaults are `src`, `stage`. |
+| `RECEIPT` | Append-only regular-file installation history; defaults to `${CURDIR}/.homestead/receipt`, with `DESTDIR` applied to its absolute location. |
+| `MD5SUM` | MD5 checker used during uninstall; defaults to the discovered `md5sum`. |
 | `vendor` | Third-party declaration root; defaults to `vendor`. |
 | `claimed_sources` | First-party inputs owned by concern-specific transformations. |
 | `claimed_outputs` | Public staged files produced from claimed sources. |
@@ -218,13 +254,15 @@ them when used:
 | `m4_vars` | Additional values recorded in context and defined as `M4_NAME`. |
 | `stage_tools` | Tool variables which must resolve before staging mutates its output. |
 | `install_tools` | Tool variables which must resolve before installation transfers files. |
+| `uninstall_tools` | Additional tool variables required before uninstall; Homestead adds `MD5SUM`. |
 | `sync_tools` | Tool variables which must resolve before synchronization begins. |
 | `required_inputs` | Caller-supplied staging values, exported to recipes and recorded in m4 context. Missing values fail stage preflight but not help, show, clean, or tool diagnostics. |
 | `show_vars` | Additional values printed by `show`. |
 | `links` | Manifest paths requiring compatibility links. |
 | `link_of` | Maps a manifest path to its compatibility location. |
 
-Tool lists contain variable names, not command names. Homestead checks `M4` when templates are present and `RSYNC` for installation
+Tool lists contain variable names, not command names. Homestead checks `M4`
+when templates are present, `RSYNC` for installation, and `MD5SUM` for uninstall
 in addition to caller tool lists. Wrappers may set lists before inclusion or
 extend them afterward. The phase targets check only their effective lists,
 while `check-tools` checks their union. Caller `SHELL`, `.SHELLFLAGS`, and
@@ -251,16 +289,42 @@ concerns, including compatibility links, are fatal regardless of selection
 policy. Destinations are compared as declared paths; filesystem symlink aliases
 are not resolved. Install does not implicitly invoke collection `check`.
 
-The driver has configurable `CONCERNS_FIRST` and `CONCERNS_LAST` policy lists.
-Both lists default to empty; collection wrappers supply their own policy. It filters
-the lists against the selected concerns. Middle concerns retain discovery
-order for implicit selection and argument order for explicit selection. When a last concern is selected, the driver stages every preceding
-concern, collects ordinary `config/env.d` files from both manifest roots using
-`inspect`, and supplies their paths to the last concern as build inputs.
-It does not inspect
-source trees or maintain a separate producer list. A concern never reads
-another repository or requires it to be installed first. Missing optional
-fragments must be safe.
+The three concern groups express directional runtime composition:
+
+| Group | Ownership and responsibility |
+| --- | --- |
+| First (`CONCERNS_FIRST`) | Own the shared runtime environment floor: variables other domains may rely on having. |
+| Middle | Own their domain configuration and contribute additional environment declarations; may rely on the floor. |
+| Last (`CONCERNS_LAST`) | Own assembly of the floor and contributions into a consumer's runtime environment, such as shell startup configuration. |
+
+Concerns build and install independently: they do not inspect sibling trees or
+require another concern to be installed first. This does not mean runtime
+self-sufficiency or duplicating the floor. Floor owners define shared variables;
+other domains use those definitions rather than restating them. Runtime
+dependencies flow from the floor through domain contributions to consumers.
+There is no middle-to-middle ordering contract. Multiple last concerns receive
+the same preceding contribution set; they do not consume one another's output.
+
+Both policy lists default to empty; a collection names its floor owners and
+consumers. The driver filters the lists against the selection: explicitly
+selecting a consumer does not automatically select a floor. Consumers own the
+behavior when optional contributions are absent or they are built standalone.
+First/last concerns follow their configured list order. Middle concerns retain
+discovery order for implicit selection and argument order for explicit
+selection, but must not depend on that incidental order.
+
+When a last concern is selected for a composing lifecycle operation, the driver
+stages preceding concerns, queries their effective `config/env.d/*.sh` paths
+through `inspect`, and delivers the ordered paths as `ENV_FRAGMENTS`. All first
+contributions precede all middle contributions; contents are unchanged. The
+driver does not source fragments or inject their runtime variables into later
+Make processes. The consumer must preserve floor-before-contribution evaluation
+when assembling its runtime configuration. Homestead guarantees ordered delivery;
+consumers own assembly and runtime behavior. Homestead tests delivery, while
+runtime environment tests belong to the consumers or configuration collection.
+
+Uninstall uses receipts and current link declarations directly. It does not
+stage earlier concerns or collect environment fragments.
 
 Selection also determines collection-level failure severity. An explicit
 concern list is strict: every named concern must succeed. With implicit
@@ -278,6 +342,6 @@ staging. Runtime evaluation is reserved for session facts which cannot be known
 then. Build macros use the `M4_` namespace, so runtime variables retain their
 ordinary names without quoting, capture, or undefinition workarounds.
 
-GNU Make 4.0+, a POSIX shell and utilities, m4, and rsync with `--mkpath`
-support are assumed. Tests also require GNU-compatible utility options noted
+GNU Make 4.0+, a POSIX shell and utilities, m4, `md5sum`, and rsync with
+`--mkpath` and `--checksum-choice=md5` support are assumed. Tests also require GNU-compatible utility options noted
 in README.md. Git manages dependency checkouts but is not a lifecycle tool.

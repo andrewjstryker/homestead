@@ -1,0 +1,51 @@
+#!/bin/sh
+# Remove regular files matching the latest recorded MD5 for each destination.
+set -eu
+receipt=${1:?receipt required}
+destdir=${2-}
+: "${MD5SUM:=md5sum}"
+: "${DRY_RUN:=}"
+if [ ! -f "$receipt" ]; then
+    printf 'uninstall: missing receipt: %s\n' "$receipt" >&2
+    exit 1
+fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+# Validate the whole receipt before removing anything. Latest record wins.
+awk -F '\t' '
+    NF != 2 || length($1) != 32 || $1 ~ /[^0-9a-f]/ ||
+        $2 !~ /^\// || $2 ~ /(^|\/)\.\.?($|\/)/ || $2 ~ /[[:cntrl:]]/ {
+        print "uninstall: invalid receipt record at line " NR > "/dev/stderr"
+        failed = 1
+        next
+    }
+    { hashes[$2] = $1 }
+    END {
+        if (failed) exit 1
+        for (path in hashes) print hashes[path] "\t" path
+    }
+' "$receipt" >"$work/latest"
+tab=$(printf '\t')
+while IFS="$tab" read -r expected path; do
+    target=${destdir}${path}
+    if [ -L "$target" ]; then
+        printf 'left modified  %s\n' "$target"
+    elif [ ! -e "$target" ]; then
+        printf 'not installed  %s\n' "$target"
+    elif [ -f "$target" ]; then
+        actual=$("$MD5SUM" < "$target")
+        actual=${actual%% *}
+        if [ "$actual" = "$expected" ]; then
+            if [ -n "$DRY_RUN" ]; then
+                printf 'would remove %s\n' "$target"
+            else
+                rm -f -- "$target"
+                printf 'removed %s\n' "$target"
+            fi
+        else
+            printf 'left modified  %s\n' "$target"
+        fi
+    else
+        printf 'left modified  %s\n' "$target"
+    fi
+done < "$work/latest"

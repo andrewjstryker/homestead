@@ -8,6 +8,7 @@ help:
 test:
 	@sh tests/staging.sh
 	@sh tests/driver.sh
+	@sh tests/receipts.sh
 
 lint:
 	@for script in home bin/* tests/*.sh; do sh -n "$$script" || exit; done

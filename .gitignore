@@ -2,3 +2,6 @@
 /tests/fixture/stage/
 /tests/driver-fixture/*/stage/
 .env
+/.homestead/
+/tests/fixture/.homestead/
+/tests/driver-fixture/*/.homestead/

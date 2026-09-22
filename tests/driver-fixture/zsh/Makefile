@@ -4,7 +4,12 @@ include ${PROTOCOL_MK}
 ZSH_TOOL ?= /bin/true
 stage_tools += ZSH_TOOL
 
-${stage}/config/composed.conf:
+# This fixture observes each invocation's supplied fragment list. Real consumers
+# own their dependency tracking for changes to composition inputs.
+.PHONY: force-composition
+force-composition:
+
+${stage}/config/composed.conf: force-composition
 	mkdir -p '$(@D)'
 	: > '$@'
 	printf '%s\n' "$${ENV_FRAGMENTS-}" | while IFS= read -r fragment; do \

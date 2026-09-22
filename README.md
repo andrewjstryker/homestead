@@ -33,12 +33,31 @@ make check                # stage and run concern checks
 make preview              # stage, then preview destination changes
 make install              # stage and install
 make sync                 # optional application-owned live work
-make uninstall            # remove files still matching the current manifest
+make uninstall            # remove files matching their latest receipt MD5
 ```
 
 Use `make install DESTDIR=/tmp/homestead-install` to prefix installation writes
 without changing embedded paths. `preview` and dry-run installation still build
-local staged files. Uninstall leaves modified installed files in place.
+local staged files. Uninstall leaves content-modified installed files in place.
+
+Install appends rsync-produced MD5 checksums and destination paths to
+`.homestead/receipt` in the concern directory, including unchanged files.
+`RECEIPT` overrides this location. Keep it out of Git; `clean` preserves it.
+`DESTDIR` prefixes its absolute location as well as payload paths, so staged
+installs have separate receipts. `make show` displays the effective location.
+
+Uninstall uses the latest record for each destination without rebuilding stage.
+It works after sources are removed or destination roots change, provided the
+same receipt remains available. It removes matching regular files even if their
+permissions changed, leaves mismatches and replacement symlinks alone, and
+retains the receipt. Missing or malformed receipts fail before removal.
+Compatibility links are removed only when they match the current Makefile
+declarations. Dry runs leave receipts unchanged.
+
+Records are appended after each successful namespace transfer. A failed rsync
+invocation may leave partial writes but contributes no receipt records; earlier
+successful transfers remain recorded. There is no rollback. Use one install or
+uninstall at a time per receipt. Full details are in [SPEC.md](SPEC.md#installation-and-ownership).
 
 ## A collection
 
@@ -66,6 +85,21 @@ export CONCERNS_FIRST="${CONCERNS_FIRST-base}"
 export CONCERNS_LAST="${CONCERNS_LAST-zsh}"
 exec "$root/_homestead/home" --root "$root" "$@"
 ```
+
+First, middle, and last describe runtime environment ownership:
+
+- **First concerns own the floor:** shared environment variables other domains
+  can rely on at runtime, without each domain recreating their definitions.
+- **Middle concerns own domain configuration and contributions:** they may rely
+  on the floor, but not on ordering among their peers.
+- **Last concerns own assembly:** they receive floor fragments followed by
+  domain contributions and assemble a shell or other consumer environment.
+
+This is a runtime dependency, not a build or installation dependency. Homestead
+passes ordered fragment paths without evaluating their contents. Consumers own
+assembly and must preserve floor-before-contribution evaluation. Multiple last
+concerns receive the same contribution set. Tests of the assembled environment
+belong to the consumer or configuration collection.
 
 Homestead itself assigns no special concern names. `CONCERNS_FIRST` and
 `CONCERNS_LAST` default to empty and accept newline-separated lists. Explicit
@@ -103,12 +137,12 @@ as `ENV_FRAGMENTS`. `fragment-files` remains a compatibility projection.
 
 ## Development
 
-Requirements: GNU Make 4.0+, POSIX shell and utilities, m4, and rsync with
-`--mkpath` support. The test suite also uses GNU-compatible `chmod --reference`,
-`find -mindepth`, and `cp -p`. Git is needed to manage dependency checkouts.
+Requirements: GNU Make 4.0+, POSIX shell and utilities, m4, `md5sum`, and rsync
+with `--mkpath` and `--checksum-choice=md5` support. The test suite also uses GNU-compatible `chmod --reference`,
+`find -mindepth`, `stat -c`, and `cp -p`. Git is needed to manage dependency checkouts.
 
 ```sh
-make test                 # isolated staging and collection fixture suites
+make test                 # isolated staging, collection, and receipt suites
 make lint                 # shell syntax and ShellCheck (installed separately)
 ```
 

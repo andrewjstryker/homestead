@@ -65,8 +65,8 @@ fi
 rm -f "${SYNC_LOG}"
 EXPECT_MIDDLE=1 "${home}" apply base middle zsh >"${test_root}/apply.out"
 test "$(cat "${SYNC_LOG}")" = sync
-grep -q '^BASE_FRAGMENT=base$' "${test_root}/zsh/stage/config/composed.conf"
-grep -q '^MIDDLE_FRAGMENT=middle$' "${test_root}/zsh/stage/config/composed.conf"
+printf 'BASE_FRAGMENT=base\nMIDDLE_FRAGMENT=middle\n' >"${test_root}/expected-fragments"
+cmp "${test_root}/expected-fragments" "${test_root}/zsh/stage/config/composed.conf"
 
 # A staged apply prefixes all writes and omits the live synchronization pass.
 rm -f "${SYNC_LOG}"
@@ -226,6 +226,16 @@ if "${home}" check linker descendant >"${test_root}/ancestor.out" 2>&1; then
 fi
 grep -q 'destination collision:.*node' "${test_root}/ancestor.out"
 "${home}" check base middle >"${test_root}/valid.out"
+
+# Uninstall uses receipts even when the concern can no longer stage or inspect.
+cat >>"${test_root}/middle/Makefile" <<'MAKEFILE'
+.PHONY: forbidden-build
+forbidden-build:
+	false
+check-stage-tools inspect: forbidden-build
+MAKEFILE
+"${home}" uninstall middle >"${test_root}/uninstall.out"
+test ! -e "${XDG_CONFIG_HOME}/middle.conf"
 
 trap - EXIT HUP INT TERM
 restore

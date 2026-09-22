@@ -43,26 +43,37 @@ $(foreach v,HOME ${path_vars},$(call require_nonempty,$v))
 
 export ${path_vars} ${required_inputs}
 
+# Installation history is independent of generated staging state. Staged
+# installs prefix the receipt location as well as payload destinations.
+RECEIPT ?= ${CURDIR}/.homestead/receipt
+$(call require_nonempty,RECEIPT)
+receipt_file = $(if ${DESTDIR},$(abspath ${DESTDIR}))$(abspath ${RECEIPT})
+receipt_destdir = $(if ${DESTDIR},$(abspath ${DESTDIR}))
+
 DESTDIR ?=
 
 # Tools and caller inputs ------------------------------------------------------
 
 M4    ?= $(shell command -v m4)
 RSYNC ?= $(shell command -v rsync)
+MD5SUM ?= $(shell command -v md5sum)
 m4_vars ?=
 
 # Tool lists contain variable names rather than commands. Wrappers extend the
 # phase in which a tool is first required; the aggregate is diagnostic only.
 stage_tools   ?=
 install_tools ?=
+uninstall_tools ?=
 sync_tools    ?=
 protocol_stage_tools   = $(if $(strip ${m4_sources}),M4)
 protocol_install_tools = RSYNC
+protocol_uninstall_tools = MD5SUM
 effective_stage_tools   = ${stage_tools} ${protocol_stage_tools}
 effective_install_tools = ${install_tools} ${protocol_install_tools}
+effective_uninstall_tools = ${uninstall_tools} ${protocol_uninstall_tools}
 effective_sync_tools    = ${sync_tools}
 tools = $(sort \
-  ${effective_stage_tools} ${effective_install_tools} ${effective_sync_tools})
+  ${effective_stage_tools} ${effective_install_tools} ${effective_sync_tools} ${effective_uninstall_tools})
 
 missing_tools = $(strip $(foreach v,$1,$(if $(strip $($v)),,$v)))
 missing_inputs = $(strip \
@@ -100,6 +111,10 @@ endef
 
 .PHONY: check-required-inputs check-stage-tool-paths
 .PHONY: check-stage-tools check-install-tools check-sync-tools
+.PHONY: check-uninstall-tools
+check-uninstall-tools:
+	$(call check_tools,${effective_uninstall_tools},uninstall)
+
 .PHONY: check-tools #> Check every declared tool requirement
 check-required-inputs:
 	$(if ${missing_inputs},\
@@ -116,7 +131,7 @@ check-install-tools:
 check-sync-tools:
 	$(call check_tools,${effective_sync_tools},sync)
 
-check-tools: check-stage-tool-paths check-install-tools check-sync-tools
+check-tools: check-stage-tool-paths check-install-tools check-sync-tools check-uninstall-tools
 
 # Source declaration and staged manifest --------------------------------------
 
@@ -243,8 +258,9 @@ rsync_flags := \
 define transfer_stage
 $(foreach n,${namespaces},\
   $(if $(wildcard ${stage}/$n/.),\
-    "${RSYNC}" ${rsync_flags} $1 --exclude='.*' \
-      '${stage}/$n/' '${DESTDIR}$(${n}_root)/';${nl}))
+    RSYNC='${RSYNC}' DRY_RUN='$1' ${PROTOCOL_BIN}/transfer \
+      '${receipt_file}' '$(abspath $(${n}_root))' '${receipt_destdir}' \
+      '${stage}/$n/' ${rsync_flags} $1 --exclude='.*';${nl}))
 endef
 
 # Vendored symlinks are dereferenced so the installed manifest remains a set of
@@ -252,8 +268,9 @@ endef
 define transfer_vendor
 $(foreach n,${namespaces},\
   $(if $(wildcard ${vendor}/$n/.),\
-    "${RSYNC}" ${rsync_flags} --copy-links $1 --exclude='.*' \
-      '${vendor}/$n/' '${DESTDIR}$(${n}_root)/';${nl}))
+    RSYNC='${RSYNC}' DRY_RUN='$1' ${PROTOCOL_BIN}/transfer \
+      '${receipt_file}' '$(abspath $(${n}_root))' '${receipt_destdir}' \
+      '${vendor}/$n/' ${rsync_flags} --copy-links $1 --exclude='.*';${nl}))
 endef
 
 transfer = $(call transfer_stage,$1) $(call transfer_vendor,$1)
@@ -267,39 +284,26 @@ preview: stage check-install-tools
 
 .PHONY: install #> Stage and install every declared destination namespace
 install: stage check-install-tools
+	$(if ${DRY_RUN},:,umask 077; mkdir -p '$(dir ${receipt_file})'; : >> '${receipt_file}')
 	$(call transfer,$(if ${DRY_RUN},--dry-run))
 	$(foreach l,${effective_links},\
 	    DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/ensure-link.sh \
 	      '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
 
-# Uninstall is deliberately content-conservative. A path belongs to the current
-# manifest, but it is removed only while its installed bytes and mode still
-# match the corresponding stage or vendor declaration.
+# Uninstall uses installation history, never rebuilding the current declaration.
 .PHONY: before-uninstall remove-installed after-uninstall
-before-uninstall: stage
+before-uninstall: check-uninstall-tools
 
 remove-installed: before-uninstall
+	MD5SUM='${MD5SUM}' DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/remove-receipt \
+	  '${receipt_file}' '${receipt_destdir}'
 	$(foreach l,${effective_links},\
 	  DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/remove-link.sh \
 	    '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
-	$(foreach f,${files},\
-	  source='$(call manifest_of,$f)'; target='${DESTDIR}$(call installed_of,$f)'; \
-	  if [ ! -e "$$target" ]; then \
-	    printf 'not installed  %s\n' "$$target"; \
-	  elif [ -f "$$target" ] && [ ! -L "$$target" ] && \
-	       cmp -s "$$source" "$$target" && \
-	       { if [ -x "$$source" ]; then [ -x "$$target" ]; \
-	         else [ ! -x "$$target" ]; fi; }; then \
-	    $(if ${DRY_RUN},\
-	      printf 'would remove %s\n' "$$target",\
-	      rm -f "$$target" && printf 'removed %s\n' "$$target"); \
-	  else \
-	    printf 'left modified  %s\n' "$$target"; \
-	  fi;${nl})
 
 after-uninstall: remove-installed
 
-.PHONY: uninstall #> Remove links still ours and files still identical to manifest
+.PHONY: uninstall #> Remove links still ours and files matching their latest receipt MD5
 uninstall: after-uninstall
 
 # Interface -------------------------------------------------------------------
@@ -314,6 +318,7 @@ show:
 	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR,\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	printf '  %-20s %s\n' 'DESTDIR' '${DESTDIR}'
+	printf '  %-20s %s\n' 'RECEIPT' '${receipt_file}'
 	$(foreach v,${show_vars},\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	$(foreach v,${tools},\
