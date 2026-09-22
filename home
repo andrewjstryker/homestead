@@ -1,0 +1,703 @@
+#!/bin/sh
+#
+# home — Homestead collection driver.
+#
+# Coordinates independent concern Makefiles through the Homestead interface.
+# Collection policy lives in caller environment values or a small wrapper.
+#
+# usage: home [--root DIR] <verb> [repository...] [options]
+#
+#   show       [repo...]    print resolved paths and concerns
+#   stage      [repo...]    realize each concern's generated manifest files
+#   preview    [repo...]    report files install would create or overwrite
+#   install    [repo...]    install each concern's declared payload
+#   sync       [repo...]    synchronize runtime and network state
+#   apply      [repo...]    install all, then sync all
+#   uninstall  [repo...]    remove what install created
+#   clean      [repo...]    remove build artifacts
+#   check      [repo...]    validate each concern's staged declarations
+#   check-tools [repo...]   check every declared tool requirement
+#   test       [repo...]    run concern-owned behavioral tests when provided
+#   help                    this message
+#
+# With no repository named, a command acts on every concern repository.
+# Name one or more to narrow it:
+#
+#   home install zsh nvim
+#   home uninstall --dry-run base
+#
+# options:
+#   --root DIR              collection directory (before verb; default: cwd)
+#   --dry-run               preview destination changes (staging may write locally)
+#   --destdir DIR           staged-root prefix for every written path
+#
+# environment:
+#   DESTDIR XDG_CONFIG_HOME XDG_RUNTIME_DIR BIN_DIR HOME MAKE
+#   HOMESTEAD_ROOT CONCERNS_FIRST CONCERNS_LAST (newline-separated lists)
+#
+set -eu
+
+# Resolve code and collection independently; the driver may live in _homestead.
+script_dir=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
+script=${script_dir}/home
+collection_root=${HOMESTEAD_ROOT:-$PWD}
+if [ "${1-}" = --root ]; then
+    [ "$#" -ge 2 ] && [ -n "$2" ] || {
+        printf 'home: --root requires a directory\n' >&2
+        exit 2
+    }
+    collection_root=$2
+    shift 2
+fi
+cd -- "$collection_root"
+
+# Every list this script splits is newline-separated, so that paths containing
+# spaces survive word splitting.  Command flags are therefore always written
+# literally, never accumulated in a variable.
+newline='
+'
+IFS=$newline
+
+# Machine inputs are data, not sourced shell. Existing environment values,
+# including explicitly empty ones, take precedence over the collection .env.
+: "${CONFIG_ENV:=.env}"
+
+read_env_file() {
+	[ -f "$1" ] || return 0
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+			''|'#'*) continue ;;
+			*=*) ;;
+			*) continue ;;
+		esac
+
+		key=${line%%=*}
+		val=${line#*=}
+
+		# NAME = value and NAME=value mean the same thing.
+		key=$(printf '%s' "$key" | tr -d ' 	')
+		val=${val# }
+
+		# One layer of surrounding quotes comes off, if both ends match.
+		case $val in
+			'"'*'"') val=${val#?}; val=${val%?} ;;
+			"'"*"'") val=${val#?}; val=${val%?} ;;
+		esac
+
+		# A name that is not a name is a typo, not an instruction.
+		case $key in
+			''|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
+		esac
+
+		# Already set in the environment? Leave it alone.
+		present=
+		eval "present=\${$key+x}"
+		[ "$present" = x ] || export "$key=$val"
+	done < "$1"
+}
+
+read_env_file "${CONFIG_ENV}"
+
+# Resolve shared roots once. Unset values default; explicit empty roots fail,
+# matching direct Make invocation. Application inputs pass through unchanged.
+: "${HOME:?HOME must be set}"
+: "${XDG_CONFIG_HOME=${HOME}/.config}"
+: "${XDG_CONFIG_HOME:?XDG_CONFIG_HOME must not be empty}"
+: "${XDG_DATA_HOME=${HOME}/.local/share}"
+: "${XDG_DATA_HOME:?XDG_DATA_HOME must not be empty}"
+: "${XDG_STATE_HOME=${HOME}/.local/state}"
+: "${XDG_STATE_HOME:?XDG_STATE_HOME must not be empty}"
+: "${XDG_CACHE_HOME=${HOME}/.cache}"
+: "${XDG_CACHE_HOME:?XDG_CACHE_HOME must not be empty}"
+: "${BIN_DIR=${HOME}/.local/bin}"
+: "${BIN_DIR:?BIN_DIR must not be empty}"
+: "${DESTDIR:=}"
+: "${MAKE:=make}"
+: "${CONCERNS_FIRST=}"
+: "${CONCERNS_LAST=}"
+
+export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR
+
+#------------------------------------------------------------------------------#
+# Concern repositories
+#
+# Anything one level down with a Makefile.  How it got there — submodule,
+# clone, symlink — is not our business. Names beginning with _ or . are private.
+#------------------------------------------------------------------------------#
+
+# Collection ordering policy. These configurable lists are filtered against the concerns
+# selected for each command: named first concerns lead, named last concerns
+# trail, and every other selected concern retains its discovery order.
+concerns_first=${CONCERNS_FIRST}
+concerns_last=${CONCERNS_LAST}
+
+listed() {
+	needle=$1
+	list=$2
+	for item in $list; do
+		[ "$item" = "$needle" ] && return 0
+	done
+	return 1
+}
+
+for concern in $concerns_first; do
+	if listed "$concern" "$concerns_last"; then
+		printf 'home: concern is both first and last: %s\n' "$concern" >&2
+		exit 2
+	fi
+done
+
+concern_repos() {
+	for dir in */; do
+		case $dir in _* | .*) continue ;; esac
+		[ -f "${dir}Makefile" ] || continue
+		printf '%s\n' "${dir%/}"
+	done | order_repos
+}
+
+# Configured first concerns, the stable middle, then configured last concerns.
+# Ordering is collection policy, never a dependency between concern repositories.
+order_repos() {
+	all=$(cat)
+
+	for wanted in $concerns_first; do
+		for repo in $all; do
+			[ "$repo" = "$wanted" ] && printf '%s\n' "$repo"
+		done
+	done
+
+	for repo in $all; do
+		listed "$repo" "$concerns_first" && continue
+		listed "$repo" "$concerns_last" && continue
+		printf '%s\n' "$repo"
+	done
+
+	for wanted in $concerns_last; do
+		for repo in $all; do
+			[ "$repo" = "$wanted" ] && printf '%s\n' "$repo"
+		done
+	done
+
+	# A missing configured concern is normal for a partial selection. Do not let
+	# the final failed comparison become the function's status under `set -e`.
+	:
+}
+
+# Resolve the repositories to act on: those named on the command line, or all
+# of them when none were named.  An unknown name is a usage error rather than
+# a silent no-op — a typo must not look like a successful install.
+resolve_repos() {
+	available=$(concern_repos)
+
+	if [ -z "$selected" ]; then
+		printf '%s' "$available"
+		return 0
+	fi
+
+	unknown=
+
+	for name in $selected; do
+		found=no
+
+		for repo in $available; do
+			if [ "$repo" = "$name" ]; then
+				found=yes
+				break
+			fi
+		done
+
+		if [ "$found" = no ]; then
+			unknown="${unknown} ${name}"
+		fi
+	done
+
+	# Named repositories are ordered too: "home install zsh base" is a
+	# request for those two, not a request to install them backwards.
+	if [ -z "$unknown" ]; then
+		printf '%s' "$selected" | order_repos
+		return 0
+	fi
+
+	if [ -n "$unknown" ]; then
+		printf 'home: no such concern repository:%s\n' "$unknown" >&2
+
+		if [ -n "$available" ]; then
+			printf 'available:' >&2
+			for repo in $available; do
+				printf ' %s' "$repo" >&2
+		done
+			printf '\n' >&2
+		else
+			printf 'no concern repositories found\n' >&2
+		fi
+
+		exit 2
+	fi
+}
+
+# Failure policy belongs to collection selection, not to concern Makefiles.
+# An explicit list is strict. With implicit discovery, the configured first and
+# last concerns are mandatory anchors while middle concerns are best-effort.
+failure_is_fatal() {
+	repo=$1
+	[ -n "$selected" ] && return 0
+	listed "$repo" "$concerns_first" && return 0
+	listed "$repo" "$concerns_last" && return 0
+	return 1
+}
+
+report_failures() {
+	phase=$1
+	warned=$2
+	failed=$3
+
+	if [ -n "$warned" ]; then
+		printf '\nWARNING (%s):%s\n' "$phase" "$warned" >&2
+	fi
+	if [ -n "$failed" ]; then
+		printf '\nFAILED (%s):%s\n' "$phase" "$failed" >&2
+		return 1
+	fi
+	return 0
+}
+
+# If a last concern is selected, stage everything before the last group, then
+# collect the environment declarations those completed manifests contain.
+#
+# A concern writes its declarations to config/env.d/*.sh in either manifest
+# root — mail's MAILDIR, security's GNUPGHOME — and whichever concern builds
+# the shell inlines them. Collecting happens HERE because this script is the
+# only thing that
+# knows the roster: a concern asking its siblings directly would be reaching
+# across repository boundaries, which Independence forbids.  Passed in as a
+# variable, they are an input like DESTDIR or EMAIL.
+#
+# Staging is incremental and inexpensive, so there is no partial `fragments`
+# target and no source-tree inspection to identify producers. A concern with no
+# config/env.d files simply contributes nothing when the manifests are scanned.
+stage_before_last() {
+	has_last=no
+	for repo in $operation_repos; do
+		if listed "$repo" "$concerns_last"; then
+			has_last=yes
+			break
+		fi
+	done
+	[ "$has_last" = yes ] || return 0
+
+	warned=
+	failed=
+	ready=
+
+	for repo in $operation_repos; do
+		if listed "$repo" "$concerns_last"; then
+			ready="${ready}${ready:+${newline}}${repo}"
+			continue
+		fi
+
+		if stage_output=$("${MAKE}" --no-print-directory -C "$repo" stage 2>&1)
+		then
+			ready="${ready}${ready:+${newline}}${repo}"
+			continue
+		fi
+
+		printf '\n==> %s: stage\n' "$repo" >&2
+		[ -z "$stage_output" ] || printf '%s\n' "$stage_output" >&2
+		if failure_is_fatal "$repo"; then
+			failed="${failed} ${repo}"
+		else
+			warned="${warned} ${repo}"
+		fi
+	done
+
+	operation_repos=$ready
+	report_failures stage "$warned" "$failed"
+}
+
+env_fragments() {
+	for repo in $operation_repos; do
+		listed "$repo" "$concerns_last" && continue
+		inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect) || {
+			printf 'home: could not inspect manifest for %s\n' "$repo" >&2
+			return 1
+		}
+		fragment_output=$(printf '%s\n' "$inspection" |
+			awk -F '\t' '$1 == "file" && $4 ~ /^config\/env.d\/.*\.sh$/ { print $3 }')
+		printf '%s\n' "$fragment_output" | while IFS= read -r source; do
+			[ -n "$source" ] || continue
+			case $source in
+				/*) printf '%s\n' "$source" ;;
+				*)  printf '%s/%s/%s\n' "$PWD" "$repo" "$source" ;;
+			esac
+		done
+	done
+
+	# Explicitly successful: with set -e, a function whose last command is a
+	# failed test returns non-zero, and `x=$(f)` then kills the script.  No
+	# fragments is the ordinary case, not an error.
+	:
+}
+
+# Run a make target in each selected repository.
+#
+# Failures are collected rather than fatal at the first one: concern
+# repositories are independent, so a broken one must not leave its siblings
+# unprocessed. Selection policy decides whether the aggregate is a warning or
+# a nonzero result.
+recurse() {
+	target=$1
+	warned=
+	failed=
+	succeeded=
+
+	if [ -z "$operation_repos" ]; then
+		printf 'No concern repositories found.\n'
+		return 0
+	fi
+
+	for repo in $operation_repos; do
+		printf '\n==> %s: %s\n' "$repo" "$target"
+		fragment_input=
+		listed "$repo" "$concerns_last" && fragment_input=${fragments-}
+		if "${MAKE}" --no-print-directory -C "$repo" "$target" \
+		       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
+		       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"
+		then
+			succeeded="${succeeded}${succeeded:+${newline}}${repo}"
+		elif failure_is_fatal "$repo"; then
+			failed="${failed} ${repo}"
+		else
+			warned="${warned} ${repo}"
+		fi
+	done
+
+	operation_repos=$succeeded
+	report_failures "$target" "$warned" "$failed"
+}
+
+# Test support is deliberately outside protocol.mk. A concern may expose a
+# `test` target using any framework or none at all. Probe Make's public target
+# database; a missing target is a normal skip, while a parse failure or failed
+# test is handled by the collection failure policy.
+target_exists() {
+	repo=$1
+	database=
+	probe_status=0
+	target_probe_status=0
+	database=$(${MAKE} --no-print-directory -C "$repo" -qp 2>&1) || probe_status=$?
+	if [ "$probe_status" -gt 1 ]; then
+		target_probe_output=$database
+		target_probe_status=2
+		return 2
+	fi
+	printf '%s\n' "$database" | awk '
+		$0 == "test:" && previous != "# Not a target:" { found=1 }
+		{ previous=$0 }
+		END { exit !found }'
+	target_probe_status=$?
+	return "$target_probe_status"
+}
+
+cmd_test() {
+	warned=
+	failed=
+
+	for repo in $operation_repos; do
+		if target_exists "$repo"; then
+			printf '\n==> %s: test\n' "$repo"
+			fragment_input=
+			listed "$repo" "$concerns_last" && fragment_input=${fragments-}
+			if "${MAKE}" --no-print-directory -C "$repo" test \
+			       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
+			       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"; then
+				:
+			elif failure_is_fatal "$repo"; then
+				failed="${failed} ${repo}"
+			else
+				warned="${warned} ${repo}"
+			fi
+			continue
+		fi
+
+		probe_status=$target_probe_status
+		if [ "$probe_status" -eq 1 ]; then
+			printf '\n==> %s: test (skipped: no test target)\n' "$repo"
+		elif failure_is_fatal "$repo"; then
+			printf '\n==> %s: test target discovery failed\n' "$repo" >&2
+			[ -z "${target_probe_output-}" ] || printf '%s\n' "$target_probe_output" >&2
+			failed="${failed} ${repo}"
+		else
+			printf '\n==> %s: test target discovery failed\n' "$repo" >&2
+			[ -z "${target_probe_output-}" ] || printf '%s\n' "$target_probe_output" >&2
+			warned="${warned} ${repo}"
+		fi
+	done
+
+	report_failures test "$warned" "$failed"
+}
+
+# Check one phase across the complete selection before any concern enters it.
+# Direct Make invocation is protected by the same targets; this collection
+# preflight prevents an early concern from mutating before a later one reports
+# a missing tool.
+preflight_tools() {
+	phase=$1
+	target=check-${phase}-tools
+	warned=
+	failed=
+	ready=
+
+	for repo in $operation_repos; do
+		if tool_output=$("${MAKE}" --no-print-directory -C "$repo" "$target" \
+		     DESTDIR="${DESTDIR}" DRY_RUN="$([ "$dry_run" = yes ] && printf 1)" \
+		     2>&1); then
+			ready="${ready}${ready:+${newline}}${repo}"
+			continue
+		fi
+
+		printf '\n==> %s: %s\n' "$repo" "$target" >&2
+		[ -z "$tool_output" ] || printf '%s\n' "$tool_output" >&2
+		if failure_is_fatal "$repo"; then
+			failed="${failed} ${repo}"
+		else
+			warned="${warned} ${repo}"
+		fi
+	done
+
+	operation_repos=$ready
+	report_failures "$target" "$warned" "$failed"
+}
+
+#------------------------------------------------------------------------------#
+# Commands
+#------------------------------------------------------------------------------#
+
+cmd_help() {
+	# The header comment block, minus the shebang, is the help text.
+	awk 'NR < 3 { next }
+	     !/^#/  { exit }
+	            { sub(/^# ?/, ""); print }' "${script}"
+}
+
+cmd_show() {
+	printf 'Environment:\n'
+	printf '  HOME............... %s\n' "${HOME}"
+	printf '  XDG_CONFIG_HOME.... %s\n' "${XDG_CONFIG_HOME}"
+	printf '  XDG_DATA_HOME...... %s\n' "${XDG_DATA_HOME}"
+	printf '  XDG_STATE_HOME..... %s\n' "${XDG_STATE_HOME}"
+	printf '  XDG_CACHE_HOME..... %s\n' "${XDG_CACHE_HOME}"
+	printf '  XDG_RUNTIME_DIR.... %s\n' "${XDG_RUNTIME_DIR:-(unset — supplied by the session manager)}"
+	printf '  BIN_DIR............ %s\n' "${BIN_DIR}"
+	printf '  DESTDIR............ %s\n' "${DESTDIR}"
+	printf '  MAKE............... %s\n' "${MAKE}"
+	printf '  CONFIG_ENV......... %s\n' \
+		"$([ -f "${CONFIG_ENV}" ] && printf '%s' "${CONFIG_ENV}" || printf '%s (absent)' "${CONFIG_ENV}")"
+	printf '  CONCERNS_FIRST..... %s\n' "${CONCERNS_FIRST}"
+	printf '  CONCERNS_LAST...... %s\n' "${CONCERNS_LAST}"
+
+	printf '\nConcern repositories'
+	[ -z "$selected" ] || printf ' (selected)'
+	printf ':\n'
+
+	if [ -n "$repos" ]; then
+		for repo in $repos; do
+			printf '  %s\n' "$repo"
+		done
+	else
+		printf '  (none)\n'
+	fi
+
+	recurse show
+}
+
+cmd_install() {
+	preflight_tools stage
+	preflight_tools install
+	stage_before_last
+	fragments=$(env_fragments)
+	recurse install
+}
+
+cmd_preview() {
+	preflight_tools stage
+	preflight_tools install
+	stage_before_last
+	fragments=$(env_fragments)
+	recurse preview
+}
+
+cmd_stage() {
+	preflight_tools stage
+	stage_before_last
+	fragments=$(env_fragments)
+	recurse stage
+}
+
+cmd_sync() {
+	if [ -n "$DESTDIR" ]; then
+		printf 'home: sync has no staged meaning; omit --destdir\n' >&2
+		return 2
+	fi
+	preflight_tools sync
+	recurse sync
+}
+
+cmd_apply() {
+	preflight_tools stage
+	preflight_tools install
+	stage_before_last
+	fragments=$(env_fragments)
+	recurse install
+
+	# DESTDIR proves filesystem installation in isolation. Synchronization acts
+	# on live tools or state and therefore has no staged meaning.
+	if [ -n "$DESTDIR" ]; then
+		printf '\nSync skipped for staged apply.\n'
+	else
+		preflight_tools sync
+		recurse sync
+	fi
+}
+
+cmd_uninstall() {
+	# Uninstall compares installed bytes with the current effective manifest, so a
+	# composed last concern must be staged with the same selected inputs first.
+	preflight_tools stage
+	stage_before_last
+	fragments=$(env_fragments)
+	recurse uninstall
+}
+
+cmd_clean() {
+	recurse clean
+}
+
+# Validate each concern, then compare destinations of successful concerns.
+cmd_check() {
+	if [ -z "$repos" ]; then
+		printf 'No concern repositories found.\n'
+		return 0
+	fi
+
+	preflight_tools stage
+	stage_before_last
+	fragments=$(env_fragments)
+	check_status=0
+	recurse check || check_status=$?
+	check_collisions || check_status=1
+	return "$check_status"
+}
+
+# Compare resolved destinations, including link paths and file/ancestor conflicts.
+# Inspect successful concerns only, retaining their established failure policy.
+check_collisions() (
+    records=$(mktemp)
+    trap 'rm -f "$records"' EXIT HUP INT TERM
+    for repo in $operation_repos; do
+        inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect) || return 1
+        printf '%s\n' "$inspection" |
+            awk -F '\t' -v owner="$repo" '
+                $1 == "file" || $1 == "link" { print $5 "\t" owner }
+            ' >> "$records"
+    done
+    LC_ALL=C sort -u "$records" | awk -F '\t' '
+        function collision(a, b, i, j, left, right) {
+            split(owners[a], left, "\t")
+            split(owners[b], right, "\t")
+            for (i in left) for (j in right) {
+                if (left[i] != right[j] && (a != b || left[i] < right[j])) {
+                    printf "home: destination collision: %s (%s) and %s (%s)\n", \
+                        a, left[i], b, right[j] > "/dev/stderr"
+                    failed = 1
+                }
+            }
+        }
+        { owners[$1] = owners[$1] (owners[$1] == "" ? "" : "\t") $2 }
+        END {
+            for (path in owners) {
+                collision(path, path)
+                parent = path
+                while (sub(/\/[^/]*$/, "", parent) && parent != "")
+                    if (parent in owners) collision(parent, path)
+            }
+            exit failed
+        }
+    '
+
+)
+
+cmd_check_tools() {
+	recurse check-tools
+}
+
+#------------------------------------------------------------------------------#
+# Dispatch
+#------------------------------------------------------------------------------#
+
+command=${1:-help}
+[ $# -eq 0 ] || shift
+case $command in -h | --help) command=help ;; esac
+
+dry_run=no
+selected=
+
+# Options and repository names may be interleaved, so that both
+# "home install zsh --dry-run" and its option-first form both work.
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run)
+			dry_run=yes
+			;;
+		--destdir)
+			shift
+			DESTDIR=${1:?--destdir requires a directory}
+			;;
+		--destdir=*)
+			DESTDIR=${1#--destdir=}
+			;;
+		-h | --help)
+			command=help
+			;;
+		-*)
+			printf 'home: unknown option: %s\n' "$1" >&2
+			exit 2
+			;;
+		*)
+			selected="${selected}${selected:+${newline}}$1"
+			;;
+	esac
+	shift
+done
+
+case $command in
+	install | sync | apply | uninstall | test)
+		;;
+	show | stage | preview | clean | check | check-tools)
+		if [ "$dry_run" = yes ]; then
+			printf 'home: %s does not take --dry-run\n' \
+				"$command" >&2
+			exit 2
+		fi
+		;;
+	help)
+		if [ -n "$selected" ]; then
+			printf 'home: help takes no repository names\n' >&2
+			exit 2
+		fi
+		;;
+	*)
+		printf 'home: unknown verb: %s\n\n' "$command" >&2
+		cmd_help >&2
+		exit 2
+		;;
+esac
+
+repos=
+[ "$command" = help ] || repos=$(resolve_repos)
+operation_repos=$repos
+
+case $command in
+	check-tools) cmd_check_tools ;;
+	*) "cmd_${command}" ;;
+esac

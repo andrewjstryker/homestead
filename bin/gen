@@ -1,0 +1,99 @@
+#!/bin/sh
+#
+# gen — expand an m4 template, replacing the output only when it changes.
+#
+# usage: gen <output> <template> [m4 argument...]
+#
+# environment:
+#   M4  m4 to use, default "m4"
+#
+# A shared renderer context can conservatively invalidate a template whose
+# resulting bytes do not change. Comparing content keeps that staged artifact
+# stable. While the newer shared context may make Make reconsider such a target
+# later, installation remains a checksum-based no-op.
+#
+# -P is not stylistic: without it, ordinary words in a configuration file that
+# happen to be m4 builtins — format, index, shift, divert, include — would be
+# expanded.  Templates open with a changequote so that apostrophes in shell and
+# config syntax are not read as m4 quotes, and a changecom so that macros in
+# comments are resolved too.
+#
+set -eu
+
+output=${1:?usage: gen <output> <template> [m4 argument...]}
+template=${2:?usage: gen <output> <template> [m4 argument...]}
+shift 2
+
+: "${M4:=m4}"
+
+# Make records render values in a private context file and passes only their
+# variable names. Normalize those pseudo-options here, where shell argument
+# construction preserves punctuation literally.
+original_count=$#
+for argument do
+	case $argument in
+		--define-context=*)
+			binding=${argument#--define-context=}
+			context_name=${binding%%=*}
+			macro_name=${binding#*=}
+			if [ "$context_name" = "$binding" ]; then
+				macro_name=$context_name
+			fi
+			case $context_name in
+				'' | *[!A-Za-z0-9_]*)
+					printf 'gen: invalid context variable name: %s\n' "$context_name" >&2
+					exit 2
+					;;
+			esac
+			case $macro_name in
+				'' | *[!A-Za-z0-9_]*)
+					printf 'gen: invalid m4 macro name: %s\n' "$macro_name" >&2
+					exit 2
+					;;
+			esac
+			: "${M4_CONTEXT_FILE:?gen: M4_CONTEXT_FILE is required}"
+			found=no
+			while IFS= read -r line || [ -n "$line" ]; do
+				if [ "${line%%=*}" = "$context_name" ]; then
+					value=${line#*=}
+					found=yes
+					break
+				fi
+			done < "$M4_CONTEXT_FILE"
+			if [ "$found" = no ]; then
+				printf 'gen: context variable not found: %s\n' "$context_name" >&2
+				exit 2
+			fi
+			set -- "$@" "--define=${macro_name}=${value}"
+			;;
+		*)
+			set -- "$@" "$argument"
+			;;
+	esac
+done
+shift "$original_count"
+
+mkdir -p "$(dirname "$output")"
+
+tmp="${output}.tmp.$$"
+trap 'rm -f "$tmp"' EXIT INT TERM
+
+# Give the temporary file the template's mode before writing it: > truncates an
+# existing file rather than recreating it, so the mode survives.  This is what
+# carries the executable bit from a templated script to its generated form —
+# the one permission bit git records, and so the only one a source can state.
+cp -p "$template" "$tmp"
+
+"${M4}" -P "$@" "$template" > "$tmp"
+
+if [ -f "$output" ] && cmp -s "$tmp" "$output"; then
+	# Content equality does not imply declaration equality: chmod +x on a
+	# template must propagate even when its rendered bytes did not change.
+	chmod a-x "$output"
+	if [ -x "$template" ]; then
+		chmod u+x "$output"
+	fi
+	rm -f "$tmp"
+else
+	mv "$tmp" "$output"
+fi

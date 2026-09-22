@@ -1,0 +1,101 @@
+#!/bin/sh
+# Verify that public staged state is exactly the declared stage manifest.
+set -eu
+
+stage=${1:?usage: validate-stage <stage> [declared-dir ...] -- [declared-file ...]}
+shift
+
+declared_dirs=
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+	declared_dirs="${declared_dirs}${declared_dirs:+
+}$1"
+	shift
+done
+[ "$#" -gt 0 ] || { printf 'validate-stage: missing -- separator\n' >&2; exit 2; }
+shift
+
+declared_files=
+for path do
+	declared_files="${declared_files}${declared_files:+
+}$path"
+done
+
+listed() {
+	needle=$1
+	list=$2
+	old_ifs=$IFS
+	IFS='
+'
+	for item in $list; do
+		[ "$item" = "$needle" ] && { IFS=$old_ifs; return 0; }
+	done
+	IFS=$old_ifs
+	return 1
+}
+
+file_descends_from() {
+	directory=$1
+	old_ifs=$IFS
+	IFS='
+'
+	for file in $declared_files; do
+		case $file in "$directory"/*) IFS=$old_ifs; return 0 ;; esac
+	done
+	IFS=$old_ifs
+	return 1
+}
+
+contains_private() {
+	find "$1" -mindepth 1 -name '.*' -print -quit | grep -q .
+}
+
+fault=0
+faults=$(mktemp "${TMPDIR:-/tmp}/validate-stage.XXXXXX")
+trap 'rm -f "$faults"' EXIT HUP INT TERM
+
+if [ -d "$stage" ]; then
+	find "$stage" \( -type f -o -type l \) -print |
+	while IFS= read -r path; do
+		relative=${path#"$stage"/}
+		case $relative in .* | */.*) continue ;; esac
+		if ! listed "$path" "$declared_files"; then
+			printf 'undeclared staged output: %s\n' "$path" >&2
+			printf '%s\n' "$path" >> "$faults"
+		fi
+	done
+
+	find "$stage" -type d -print |
+	while IFS= read -r path; do
+		[ "$path" = "$stage" ] && continue
+		relative=${path#"$stage"/}
+		case $relative in .* | */.*) continue ;; esac
+		if ! listed "$path" "$declared_dirs" && \
+		   ! file_descends_from "$path" && ! contains_private "$path"; then
+			printf 'undeclared staged directory: %s/\n' "$path" >&2
+			printf '%s\n' "$path" >> "$faults"
+		fi
+	done
+fi
+
+old_ifs=$IFS
+IFS='
+'
+for path in $declared_dirs; do
+	if [ ! -d "$path" ]; then
+		printf 'missing staged directory: %s/\n' "$path" >&2
+		fault=1
+	fi
+done
+for path in $declared_files; do
+	if [ ! -f "$path" ] && [ ! -L "$path" ]; then
+		printf 'missing staged output: %s\n' "$path" >&2
+		fault=1
+	fi
+done
+IFS=$old_ifs
+
+if [ -s "$faults" ]; then
+	fault=1
+fi
+
+exit "$fault"

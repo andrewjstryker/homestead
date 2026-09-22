@@ -1,0 +1,4 @@
+/stage/
+/tests/fixture/stage/
+/tests/driver-fixture/*/stage/
+.env

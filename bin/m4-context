@@ -1,0 +1,24 @@
+#!/bin/sh
+# Reconcile the renderer context which participates in the Make graph.
+
+set -eu
+
+output=${1:?usage: m4-context <output>}
+
+mkdir -p "$(dirname "$output")"
+
+tmp="${output}.tmp.$$"
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+printf '%s' "${M4_CONTEXT-}" |
+	while IFS= read -r line || [ -n "$line" ]; do
+		# GNU Make's foreach separates records with one space. Each record
+		# already ends in a newline, so remove that separator on the next line.
+		printf '%s\n' "${line# }"
+	done > "$tmp"
+
+if [ -f "$output" ] && cmp -s "$tmp" "$output"; then
+	rm -f "$tmp"
+else
+	mv "$tmp" "$output"
+fi
