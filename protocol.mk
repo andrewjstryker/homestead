@@ -123,7 +123,7 @@ check-required-inputs:
 check-stage-tool-paths:
 	$(call check_tools,${effective_stage_tools},stage)
 
-check-stage-tools: check-required-inputs check-stage-tool-paths
+check-stage-tools: check-declarations check-required-inputs check-stage-tool-paths
 
 check-install-tools:
 	$(call check_tools,${effective_install_tools},install)
@@ -196,7 +196,7 @@ stage_expected_dirs = ${staged_dirs}
 stage_expected_files = ${staged_files}
 
 ifneq ($(strip ${staged_files}),)
-${staged_files}: | prune
+$(sort ${staged_files}): | prune
 endif
 
 .PHONY: stage #> Prune and incrementally realize the complete staged manifest
@@ -246,6 +246,30 @@ mode_of     = $(if $(shell test -x '$(call declared_by,$1)' && echo x),0700,0600
 # the application insists on; concerns override it when the default
 # ~/.<basename> convention does not fit.
 link_of = ${HOME}/.$(notdir $1)
+
+# Declaration validation -------------------------------------------------------
+
+# Validate the lists before Make's target graph or sort can hide duplicates.
+# Only enumerate duplicate names when the counts differ (vendor lists can be
+# large). Paths follow the same whitespace/Make-pattern limitations as manifests.
+declaration_duplicates = $(if $(filter $(words $1),$(words $(sort $1))),,\
+  $(sort $(foreach f,$1,$(if $(word 2,$(filter $f,$1)),$f))))
+
+# Parent directory names, using only Make's path functions; no filesystem walk.
+declaration_parents = $(if $(filter ./ /,$(dir $1)),,\
+  $(patsubst %/,%,$(dir $1)) \
+  $(call declaration_parents,$(patsubst %/,%,$(dir $1))))
+
+.PHONY: check-declarations #> Reject conflicting declared manifest paths
+check-declarations:
+	$(eval homestead_decl_files := ${stage_files} ${vendor_files})
+	$(eval homestead_decl_duplicates := $(call declaration_duplicates,${homestead_decl_files}))
+	$(if ${homestead_decl_duplicates},$(error Duplicate manifest files: ${homestead_decl_duplicates}))
+	$(eval homestead_decl_dirs := $(sort \
+	  $(patsubst ${stage}/%,%,${staged_dirs}) \
+	  $(foreach f,${homestead_decl_files},$(call declaration_parents,$f))))
+	$(eval homestead_decl_conflicts := $(filter ${homestead_decl_files},${homestead_decl_dirs}))
+	$(if ${homestead_decl_conflicts},$(error Manifest paths declared as both file and directory: ${homestead_decl_conflicts}))
 
 # Transfer --------------------------------------------------------------------
 

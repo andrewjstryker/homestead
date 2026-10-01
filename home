@@ -237,15 +237,28 @@ resolve_repos() {
 	fi
 }
 
-# Failure policy belongs to collection selection, not to concern Makefiles.
-# An explicit list is strict. With implicit discovery, the configured first and
-# last concerns are mandatory anchors while middle concerns are best-effort.
+# Stage and installation failures are always errors. Other commands retain
+# selection-based severity: explicit concerns and first/last anchors are strict.
 failure_is_fatal() {
 	repo=$1
+	case $failure_policy in collect | stop) return 0 ;; esac
 	[ -n "$selected" ] && return 0
 	listed "$repo" "$concerns_first" && return 0
 	listed "$repo" "$concerns_last" && return 0
 	return 1
+}
+
+# Called from guarded Make invocations; do not rely on errexit inside functions.
+record_failure() {
+	if [ "$failure_policy" = stop ]; then
+		printf '\nFAILED (%s): %s\n' "$1" "$2" >&2
+		return 1
+	fi
+	if failure_is_fatal "$2"; then
+		failed="${failed} $2"
+	else
+		warned="${warned} $2"
+	fi
 }
 
 report_failures() {
@@ -278,6 +291,7 @@ report_failures() {
 # target and no source-tree inspection to identify producers. A concern with no
 # config/env.d files simply contributes nothing when the manifests are scanned.
 stage_before_last() {
+	staged_repos=
 	has_last=no
 	for repo in $operation_repos; do
 		if listed "$repo" "$concerns_last"; then
@@ -299,53 +313,67 @@ stage_before_last() {
 
 		if stage_output=$("${MAKE}" --no-print-directory -C "$repo" stage 2>&1)
 		then
+			staged_repos="${staged_repos}${staged_repos:+${newline}}${repo}"
 			ready="${ready}${ready:+${newline}}${repo}"
 			continue
 		fi
 
 		printf '\n==> %s: stage\n' "$repo" >&2
 		[ -z "$stage_output" ] || printf '%s\n' "$stage_output" >&2
-		if failure_is_fatal "$repo"; then
-			failed="${failed} ${repo}"
-		else
-			warned="${warned} ${repo}"
-		fi
+		record_failure stage "$repo" || return 1
 	done
 
 	operation_repos=$ready
 	report_failures stage "$warned" "$failed"
 }
 
-env_fragments() {
+# Collect paths in the parent shell so collect-mode failures and surviving
+# producers remain visible to the caller. Never evaluate fragment contents.
+collect_fragments() {
+	fragments=
+	has_last=no
 	for repo in $operation_repos; do
-		listed "$repo" "$concerns_last" && continue
-		inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect) || {
+		if listed "$repo" "$concerns_last"; then has_last=yes; break; fi
+	done
+	[ "$has_last" = yes ] || return 0
+
+	warned=
+	failed=
+	ready=
+	for repo in $operation_repos; do
+		if listed "$repo" "$concerns_last"; then
+			ready="${ready}${ready:+${newline}}${repo}"
+			continue
+		fi
+		if inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect); then
+			ready="${ready}${ready:+${newline}}${repo}"
+		else
 			printf 'home: could not inspect manifest for %s\n' "$repo" >&2
-			return 1
-		}
+			[ "$failure_policy" != selection ] || return 1
+			record_failure inspect "$repo" || return 1
+			continue
+		fi
 		fragment_output=$(printf '%s\n' "$inspection" |
-			awk -F '\t' '$1 == "file" && $4 ~ /^config\/env.d\/.*\.sh$/ { print $3 }')
-		printf '%s\n' "$fragment_output" | while IFS= read -r source; do
+			awk -F '\t' '$1 == "file" && $4 ~ /^config\/env.d\/.*\.sh$/ { print $3 }') || return 1
+		while IFS= read -r source; do
 			[ -n "$source" ] || continue
 			case $source in
-				/*) printf '%s\n' "$source" ;;
-				*)  printf '%s/%s/%s\n' "$PWD" "$repo" "$source" ;;
+				/*) fragment_path=$source ;;
+				*) fragment_path=$PWD/$repo/$source ;;
 			esac
-		done
+			fragments="${fragments}${fragments:+${newline}}${fragment_path}"
+		done <<EOF
+$fragment_output
+EOF
 	done
-
-	# Explicitly successful: with set -e, a function whose last command is a
-	# failed test returns non-zero, and `x=$(f)` then kills the script.  No
-	# fragments is the ordinary case, not an error.
-	:
+	operation_repos=$ready
+	report_failures inspect "$warned" "$failed"
 }
 
 # Run a make target in each selected repository.
 #
-# Failures are collected rather than fatal at the first one: concern
-# repositories are independent, so a broken one must not leave its siblings
-# unprocessed. Selection policy decides whether the aggregate is a warning or
-# a nonzero result.
+# The command chooses whether to collect failures or stop immediately.
+# Completed writes and receipts are never rolled back.
 recurse() {
 	target=$1
 	warned=
@@ -366,10 +394,8 @@ recurse() {
 		       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"
 		then
 			succeeded="${succeeded}${succeeded:+${newline}}${repo}"
-		elif failure_is_fatal "$repo"; then
-			failed="${failed} ${repo}"
 		else
-			warned="${warned} ${repo}"
+			record_failure "$target" "$repo" || return 1
 		fi
 	done
 
@@ -459,11 +485,7 @@ preflight_tools() {
 
 		printf '\n==> %s: %s\n' "$repo" "$target" >&2
 		[ -z "$tool_output" ] || printf '%s\n' "$tool_output" >&2
-		if failure_is_fatal "$repo"; then
-			failed="${failed} ${repo}"
-		else
-			warned="${warned} ${repo}"
-		fi
+		record_failure "$target" "$repo" || return 1
 	done
 
 	operation_repos=$ready
@@ -513,26 +535,36 @@ cmd_show() {
 }
 
 cmd_install() {
-	preflight_tools stage
-	preflight_tools install
-	stage_before_last
-	fragments=$(env_fragments)
-	recurse install
+	preflight_tools stage || return 1
+	preflight_tools install || return 1
+	stage_before_last || return 1
+	collect_fragments || return 1
+	recurse install || return 1
 }
 
 cmd_preview() {
 	preflight_tools stage
 	preflight_tools install
 	stage_before_last
-	fragments=$(env_fragments)
+	collect_fragments
 	recurse preview
 }
 
 cmd_stage() {
-	preflight_tools stage
-	stage_before_last
-	fragments=$(env_fragments)
-	recurse stage
+	stage_status=0
+	preflight_tools stage || stage_status=1
+	stage_before_last || stage_status=1
+	collect_fragments || stage_status=1
+	# Producers staged for composition are already complete. Only stage the
+	# remaining concerns, avoiding a second attempt or duplicate side effects.
+	remaining=
+	for repo in $operation_repos; do
+		listed "$repo" "$staged_repos" && continue
+		remaining="${remaining}${remaining:+${newline}}${repo}"
+	done
+	operation_repos=$remaining
+	recurse stage || stage_status=1
+	return "$stage_status"
 }
 
 cmd_sync() {
@@ -545,19 +577,19 @@ cmd_sync() {
 }
 
 cmd_apply() {
-	preflight_tools stage
-	preflight_tools install
-	stage_before_last
-	fragments=$(env_fragments)
-	recurse install
+	preflight_tools stage || return 1
+	preflight_tools install || return 1
+	stage_before_last || return 1
+	collect_fragments || return 1
+	recurse install || return 1
 
 	# DESTDIR proves filesystem installation in isolation. Synchronization acts
 	# on live tools or state and therefore has no staged meaning.
 	if [ -n "$DESTDIR" ]; then
 		printf '\nSync skipped for staged apply.\n'
 	else
-		preflight_tools sync
-		recurse sync
+		preflight_tools sync || return 1
+		recurse sync || return 1
 	fi
 }
 
@@ -580,7 +612,7 @@ cmd_check() {
 
 	preflight_tools stage
 	stage_before_last
-	fragments=$(env_fragments)
+	collect_fragments
 	check_status=0
 	recurse check || check_status=$?
 	check_collisions || check_status=1
@@ -689,6 +721,13 @@ case $command in
 		cmd_help >&2
 		exit 2
 		;;
+esac
+
+# Continuation is a command policy, independent of concern composition roles.
+failure_policy=selection
+case $command in
+	stage) failure_policy=collect ;;
+	install | apply) failure_policy=stop ;;
 esac
 
 repos=

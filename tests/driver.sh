@@ -47,18 +47,28 @@ fi
 grep -q 'FAILED (check-install-tools): middle' "${test_root}/preflight.out"
 test ! -e "${XDG_CONFIG_HOME}/base.conf"
 
-# Runtime failures use the same policy. During implicit apply, a failed middle
-# install is warned and excluded from sync; successful installs synchronize
-# only after the complete install pass finishes.
-rm -f "${SYNC_LOG}"
-FAIL_INSTALL=1 "${home}" apply >"${test_root}/runtime-warning.out" 2>&1
-grep -q 'WARNING (install): runtime-fail' \
-	"${test_root}/runtime-warning.out"
-grep -q '^sync$' "${SYNC_LOG}"
-if grep -q '^runtime-fail-sync$' "${SYNC_LOG}"; then
-	printf 'failed install concern entered apply sync pass\n' >&2
-	exit 1
-fi
+# Installation failures stop immediately for both selection forms and commands.
+for verb in install apply; do
+    for selection in implicit explicit; do
+        rm -rf "${XDG_CONFIG_HOME}" "${XDG_DATA_HOME}" "${XDG_STATE_HOME}" \
+            "${XDG_CACHE_HOME}" "${BIN_DIR}"
+        rm -f "${SYNC_LOG}"
+        set --
+        if [ "$selection" = explicit ]; then set -- base middle runtime-fail zsh; fi
+        if AVAILABILITY_INPUT=ready FAIL_INSTALL=1 "${home}" "$verb" "$@" \
+            >"${test_root}/runtime-failure.out" 2>&1; then
+            printf 'expected %s %s installation failure\n' "$selection" "$verb" >&2
+            exit 1
+        fi
+        grep -q 'FAILED (install): runtime-fail' "${test_root}/runtime-failure.out"
+        test -f "${XDG_CONFIG_HOME}/base.conf"
+        test -f "${XDG_CONFIG_HOME}/middle.conf"
+        test -s "${test_root}/base/.homestead/receipt"
+        test ! -e "${XDG_CONFIG_HOME}/zsh.conf"
+        test ! -e "${SYNC_LOG}"
+        if grep -q '^==> zsh: install$' "${test_root}/runtime-failure.out"; then exit 1; fi
+    done
+done
 
 # apply installs the whole selection before any sync recipe runs. The last
 # concern receives composed fragments from the effective preceding manifests.
@@ -79,21 +89,18 @@ test -f "${destdir}${XDG_CONFIG_HOME}/zsh.conf"
 test ! -e "${SYNC_LOG}"
 grep -q '^Sync skipped for staged apply.$' "${test_root}/destdir.out"
 
-# With implicit discovery, middle concerns are best-effort. A failed middle
-# preflight is reported as a warning and excluded while the Base/Zsh anchors
-# still complete. Explicit selection above remains strict.
+# Implicit selection also treats every preflight failure as fatal.
 rm -rf "${XDG_CONFIG_HOME}" "${XDG_DATA_HOME}" "${XDG_STATE_HOME}" \
-	"${XDG_CACHE_HOME}" "${BIN_DIR}"
-if ! REQUIRED_TOOL='' "${home}" install \
-	>"${test_root}/implicit-warning.out" 2>&1; then
-	printf 'implicit optional concern failure was fatal\n' >&2
-	exit 1
+    "${XDG_CACHE_HOME}" "${BIN_DIR}"
+if AVAILABILITY_INPUT=ready REQUIRED_TOOL='' "${home}" install \
+    >"${test_root}/implicit-failure.out" 2>&1; then
+    printf 'expected implicit preflight failure\n' >&2
+    exit 1
 fi
-grep -q 'WARNING (check-install-tools): middle' \
-	"${test_root}/implicit-warning.out"
-test -f "${XDG_CONFIG_HOME}/base.conf"
+grep -q 'FAILED (check-install-tools): middle' "${test_root}/implicit-failure.out"
+test ! -e "${XDG_CONFIG_HOME}/base.conf"
 test ! -e "${XDG_CONFIG_HOME}/middle.conf"
-test -f "${XDG_CONFIG_HOME}/zsh.conf"
+test ! -e "${XDG_CONFIG_HOME}/zsh.conf"
 
 # Either anchor failing preflight makes the implicit operation fail before any
 # selected concern mutates its destination.
@@ -106,20 +113,19 @@ fi
 grep -q 'FAILED (check-stage-tools): base' "${test_root}/base-fatal.out"
 test ! -e "${XDG_CONFIG_HOME}/zsh.conf"
 
-if ZSH_TOOL='' "${home}" install >"${test_root}/zsh-fatal.out" 2>&1; then
+if AVAILABILITY_INPUT=ready ZSH_TOOL='' "${home}" install >"${test_root}/zsh-fatal.out" 2>&1; then
 	printf 'implicit Zsh failure was not fatal\n' >&2
 	exit 1
 fi
 grep -q 'FAILED (check-stage-tools): zsh' "${test_root}/zsh-fatal.out"
 test ! -e "${XDG_CONFIG_HOME}/base.conf"
 
-# An unavailable middle concern fails normally. Implicit selection warns,
-# excludes it from fragment composition, and continues with the anchors.
-if ! "${home}" stage >"${test_root}/unavailable-warning.out" 2>&1; then
-	printf 'implicit unavailable concern failure was fatal\n' >&2
+# Stage continues with other concerns, excludes failed producers, and fails overall.
+if "${home}" stage >"${test_root}/unavailable-warning.out" 2>&1; then
+	printf 'implicit stage failure returned success\n' >&2
 	exit 1
 fi
-grep -q 'WARNING (check-stage-tools): unavailable' \
+grep -q 'FAILED (check-stage-tools): unavailable' \
 	"${test_root}/unavailable-warning.out"
 if grep -q 'UNAVAILABLE_FRAGMENT' \
 	"${test_root}/zsh/stage/config/composed.conf"; then
@@ -127,8 +133,7 @@ if grep -q 'UNAVAILABLE_FRAGMENT' \
 	exit 1
 fi
 
-# Naming that concern makes the same ordinary failure strict; the driver does
-# not inspect the reason or require a separate eligibility status.
+# Explicit stage selection uses the same failure status.
 if AVAILABILITY_INPUT='' "${home}" stage unavailable \
 	>"${test_root}/unavailable-explicit.out" 2>&1; then
 	printf 'explicit unavailable concern failure was not fatal\n' >&2
