@@ -2,25 +2,24 @@
 #
 # home — Homestead collection driver.
 #
-# Coordinates independent concern Makefiles through the Homestead interface.
+# Coordinates independent module Makefiles through the Homestead interface.
 # Collection policy lives in caller environment values or a small wrapper.
 #
-# usage: home [--root DIR] <verb> [repository...] [options]
+# usage: home [--root DIR] <verb> [module...] [options]
 #
-#   show       [repo...]    print resolved paths and concerns
-#   stage      [repo...]    realize each concern's generated manifest files
-#   preview    [repo...]    report files install would create or overwrite
-#   install    [repo...]    install each concern's declared payload
-#   sync       [repo...]    synchronize runtime and network state
-#   apply      [repo...]    install all, then sync all
-#   uninstall  [repo...]    remove what install created
-#   clean      [repo...]    remove build artifacts
-#   check      [repo...]    validate each concern's staged declarations
-#   check-tools [repo...]   check every declared tool requirement
-#   test       [repo...]    run concern-owned behavioral tests when provided
-#   help                    this message
+#   show       [module...]    print resolved paths and modules
+#   check      [module...]    run full preflight without staging or installing
+#   stage      [module...]    realize each module's generated manifest files
+#   preview    [module...]    report files install would create or overwrite
+#   install    [module...]    install each module's declared payload
+#   sync       [module...]    synchronize runtime and network state
+#   apply      [module...]    install all, then sync all
+#   uninstall  [module...]    remove what install created
+#   clean      [module...]    remove build artifacts
+#   test       [module...]    run module-owned behavioral tests when provided
+#   help                       this message
 #
-# With no repository named, a command acts on every concern repository.
+# With no module named, a command acts on every discovered module.
 # Name one or more to narrow it:
 #
 #   home install zsh nvim
@@ -33,7 +32,7 @@
 #
 # environment:
 #   DESTDIR XDG_CONFIG_HOME XDG_RUNTIME_DIR BIN_DIR HOME MAKE
-#   HOMESTEAD_ROOT CONCERNS_FIRST CONCERNS_LAST (newline-separated lists)
+#   HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST (newline-separated lists)
 #
 set -eu
 
@@ -114,23 +113,23 @@ read_env_file "${CONFIG_ENV}"
 : "${BIN_DIR:?BIN_DIR must not be empty}"
 : "${DESTDIR:=}"
 : "${MAKE:=make}"
-: "${CONCERNS_FIRST=}"
-: "${CONCERNS_LAST=}"
+: "${MODULES_FIRST=}"
+: "${MODULES_LAST=}"
 
 export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR
 
 #------------------------------------------------------------------------------#
-# Concern repositories
+# Modules
 #
 # Anything one level down with a Makefile.  How it got there — submodule,
 # clone, symlink — is not our business. Names beginning with _ or . are private.
 #------------------------------------------------------------------------------#
 
-# Collection ordering policy. These configurable lists are filtered against the concerns
-# selected for each command: named first concerns lead, named last concerns
-# trail, and every other selected concern retains its discovery order.
-concerns_first=${CONCERNS_FIRST}
-concerns_last=${CONCERNS_LAST}
+# Collection ordering policy. These configurable lists are filtered against the modules
+# selected for each command: named first modules lead, named last modules
+# trail, and every other selected module retains its discovery order.
+modules_first=${MODULES_FIRST}
+modules_last=${MODULES_LAST}
 
 listed() {
 	needle=$1
@@ -141,14 +140,14 @@ listed() {
 	return 1
 }
 
-for concern in $concerns_first; do
-	if listed "$concern" "$concerns_last"; then
-		printf 'home: concern is both first and last: %s\n' "$concern" >&2
+for module in $modules_first; do
+	if listed "$module" "$modules_last"; then
+		printf 'home: module is both first and last: %s\n' "$module" >&2
 		exit 2
 	fi
 done
 
-concern_repos() {
+module_repos() {
 	for dir in */; do
 		case $dir in _* | .*) continue ;; esac
 		[ -f "${dir}Makefile" ] || continue
@@ -156,40 +155,40 @@ concern_repos() {
 	done | order_repos
 }
 
-# Configured first concerns, the stable middle, then configured last concerns.
+# Configured first modules, the stable middle, then configured last modules.
 # The ordering delivers runtime floor fragments before domain contributions.
-# It does not create a build or installation dependency between concerns.
+# It does not create a build or installation dependency between modules.
 order_repos() {
 	all=$(cat)
 
-	for wanted in $concerns_first; do
+	for wanted in $modules_first; do
 		for repo in $all; do
 			[ "$repo" = "$wanted" ] && printf '%s\n' "$repo"
 		done
 	done
 
 	for repo in $all; do
-		listed "$repo" "$concerns_first" && continue
-		listed "$repo" "$concerns_last" && continue
+		listed "$repo" "$modules_first" && continue
+		listed "$repo" "$modules_last" && continue
 		printf '%s\n' "$repo"
 	done
 
-	for wanted in $concerns_last; do
+	for wanted in $modules_last; do
 		for repo in $all; do
 			[ "$repo" = "$wanted" ] && printf '%s\n' "$repo"
 		done
 	done
 
-	# A missing configured concern is normal for a partial selection. Do not let
+	# A missing configured module is normal for a partial selection. Do not let
 	# the final failed comparison become the function's status under `set -e`.
 	:
 }
 
-# Resolve the repositories to act on: those named on the command line, or all
+# Resolve the modules to act on: those named on the command line, or all
 # of them when none were named.  An unknown name is a usage error rather than
 # a silent no-op — a typo must not look like a successful install.
 resolve_repos() {
-	available=$(concern_repos)
+	available=$(module_repos)
 
 	if [ -z "$selected" ]; then
 		printf '%s' "$available"
@@ -213,7 +212,7 @@ resolve_repos() {
 		fi
 	done
 
-	# Named repositories are ordered too: "home install zsh base" is a
+	# Named modules are ordered too: "home install zsh base" is a
 	# request for those two, not a request to install them backwards.
 	if [ -z "$unknown" ]; then
 		printf '%s' "$selected" | order_repos
@@ -221,7 +220,7 @@ resolve_repos() {
 	fi
 
 	if [ -n "$unknown" ]; then
-		printf 'home: no such concern repository:%s\n' "$unknown" >&2
+		printf 'home: no such module:%s\n' "$unknown" >&2
 
 		if [ -n "$available" ]; then
 			printf 'available:' >&2
@@ -230,21 +229,21 @@ resolve_repos() {
 		done
 			printf '\n' >&2
 		else
-			printf 'no concern repositories found\n' >&2
+			printf 'no modules found\n' >&2
 		fi
 
 		exit 2
 	fi
 }
 
-# Stage and installation failures are always errors. Other commands retain
-# selection-based severity: explicit concerns and first/last anchors are strict.
+# Check, stage, and installation failures are always errors. Other commands retain
+# selection-based severity: explicit modules and first/last anchors are strict.
 failure_is_fatal() {
 	repo=$1
 	case $failure_policy in collect | stop) return 0 ;; esac
 	[ -n "$selected" ] && return 0
-	listed "$repo" "$concerns_first" && return 0
-	listed "$repo" "$concerns_last" && return 0
+	listed "$repo" "$modules_first" && return 0
+	listed "$repo" "$modules_last" && return 0
 	return 1
 }
 
@@ -276,25 +275,25 @@ report_failures() {
 	return 0
 }
 
-# If a last concern is selected, stage everything before the last group, then
+# If a last module is selected, stage everything before the last group, then
 # collect the environment declarations those completed manifests contain.
 #
-# A concern writes its declarations to config/env.d/*.sh in either manifest
-# root — mail's MAILDIR, security's GNUPGHOME — and whichever concern builds
+# A module writes its declarations to config/env.d/*.sh in either manifest
+# root — mail's MAILDIR, security's GNUPGHOME — and whichever module builds
 # the shell inlines them. Collecting happens HERE because this script is the
 # only thing that
-# knows the roster: a concern asking its siblings directly would be reaching
-# across repository boundaries, which Independence forbids.  Passed in as a
+# knows the roster: a module asking its siblings directly would be reaching
+# across module boundaries, which Independence forbids.  Passed in as a
 # variable, they are an input like DESTDIR or EMAIL.
 #
 # Staging is incremental and inexpensive, so there is no partial `fragments`
-# target and no source-tree inspection to identify producers. A concern with no
+# target and no source-tree inspection to identify producers. A module with no
 # config/env.d files simply contributes nothing when the manifests are scanned.
 stage_before_last() {
 	staged_repos=
 	has_last=no
 	for repo in $operation_repos; do
-		if listed "$repo" "$concerns_last"; then
+		if listed "$repo" "$modules_last"; then
 			has_last=yes
 			break
 		fi
@@ -306,7 +305,7 @@ stage_before_last() {
 	ready=
 
 	for repo in $operation_repos; do
-		if listed "$repo" "$concerns_last"; then
+		if listed "$repo" "$modules_last"; then
 			ready="${ready}${ready:+${newline}}${repo}"
 			continue
 		fi
@@ -333,7 +332,7 @@ collect_fragments() {
 	fragments=
 	has_last=no
 	for repo in $operation_repos; do
-		if listed "$repo" "$concerns_last"; then has_last=yes; break; fi
+		if listed "$repo" "$modules_last"; then has_last=yes; break; fi
 	done
 	[ "$has_last" = yes ] || return 0
 
@@ -341,7 +340,7 @@ collect_fragments() {
 	failed=
 	ready=
 	for repo in $operation_repos; do
-		if listed "$repo" "$concerns_last"; then
+		if listed "$repo" "$modules_last"; then
 			ready="${ready}${ready:+${newline}}${repo}"
 			continue
 		fi
@@ -370,7 +369,7 @@ EOF
 	report_failures inspect "$warned" "$failed"
 }
 
-# Run a make target in each selected repository.
+# Run a make target in each selected module.
 #
 # The command chooses whether to collect failures or stop immediately.
 # Completed writes and receipts are never rolled back.
@@ -381,14 +380,14 @@ recurse() {
 	succeeded=
 
 	if [ -z "$operation_repos" ]; then
-		printf 'No concern repositories found.\n'
+		printf 'No modules found.\n'
 		return 0
 	fi
 
 	for repo in $operation_repos; do
 		printf '\n==> %s: %s\n' "$repo" "$target"
 		fragment_input=
-		listed "$repo" "$concerns_last" && fragment_input=${fragments-}
+		listed "$repo" "$modules_last" && fragment_input=${fragments-}
 		if "${MAKE}" --no-print-directory -C "$repo" "$target" \
 		       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
 		       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"
@@ -403,7 +402,7 @@ recurse() {
 	report_failures "$target" "$warned" "$failed"
 }
 
-# Test support is deliberately outside protocol.mk. A concern may expose a
+# Test support is deliberately outside homestead.mk. A module may expose a
 # `test` target using any framework or none at all. Probe Make's public target
 # database; a missing target is a normal skip, while a parse failure or failed
 # test is handled by the collection failure policy.
@@ -434,7 +433,7 @@ cmd_test() {
 		if target_exists "$repo"; then
 			printf '\n==> %s: test\n' "$repo"
 			fragment_input=
-			listed "$repo" "$concerns_last" && fragment_input=${fragments-}
+			listed "$repo" "$modules_last" && fragment_input=${fragments-}
 			if "${MAKE}" --no-print-directory -C "$repo" test \
 			       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
 			       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"; then
@@ -464,9 +463,9 @@ cmd_test() {
 	report_failures test "$warned" "$failed"
 }
 
-# Check one phase across the complete selection before any concern enters it.
+# Check one phase across the complete selection before any module enters it.
 # Direct Make invocation is protected by the same targets; this collection
-# preflight prevents an early concern from mutating before a later one reports
+# preflight prevents an early module from mutating before a later one reports
 # a missing tool.
 preflight_tools() {
 	phase=$1
@@ -516,10 +515,10 @@ cmd_show() {
 	printf '  MAKE............... %s\n' "${MAKE}"
 	printf '  CONFIG_ENV......... %s\n' \
 		"$([ -f "${CONFIG_ENV}" ] && printf '%s' "${CONFIG_ENV}" || printf '%s (absent)' "${CONFIG_ENV}")"
-	printf '  CONCERNS_FIRST..... %s\n' "${CONCERNS_FIRST}"
-	printf '  CONCERNS_LAST...... %s\n' "${CONCERNS_LAST}"
+	printf '  MODULES_FIRST...... %s\n' "${MODULES_FIRST}"
+	printf '  MODULES_LAST....... %s\n' "${MODULES_LAST}"
 
-	printf '\nConcern repositories'
+	printf '\nModules'
 	[ -z "$selected" ] || printf ' (selected)'
 	printf ':\n'
 
@@ -556,7 +555,7 @@ cmd_stage() {
 	stage_before_last || stage_status=1
 	collect_fragments || stage_status=1
 	# Producers staged for composition are already complete. Only stage the
-	# remaining concerns, avoiding a second attempt or duplicate side effects.
+	# remaining modules, avoiding a second attempt or duplicate side effects.
 	remaining=
 	for repo in $operation_repos; do
 		listed "$repo" "$staged_repos" && continue
@@ -603,16 +602,13 @@ cmd_clean() {
 	recurse clean
 }
 
-# Validate each concern, then compare destinations of successful concerns.
+# Validate each module, then compare destinations of successful modules.
 cmd_check() {
 	if [ -z "$repos" ]; then
-		printf 'No concern repositories found.\n'
+		printf 'No modules found.\n'
 		return 0
 	fi
 
-	preflight_tools stage
-	stage_before_last
-	collect_fragments
 	check_status=0
 	recurse check || check_status=$?
 	check_collisions || check_status=1
@@ -620,7 +616,7 @@ cmd_check() {
 }
 
 # Compare resolved destinations, including link paths and file/ancestor conflicts.
-# Inspect successful concerns only, retaining their established failure policy.
+# Inspect successful modules only, retaining their established failure policy.
 check_collisions() (
     records=$(mktemp)
     trap 'rm -f "$records"' EXIT HUP INT TERM
@@ -657,10 +653,6 @@ check_collisions() (
 
 )
 
-cmd_check_tools() {
-	recurse check-tools
-}
-
 #------------------------------------------------------------------------------#
 # Dispatch
 #------------------------------------------------------------------------------#
@@ -672,7 +664,7 @@ case $command in -h | --help) command=help ;; esac
 dry_run=no
 selected=
 
-# Options and repository names may be interleaved, so that both
+# Options and module names may be interleaved, so that both
 # "home install zsh --dry-run" and its option-first form both work.
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -703,7 +695,7 @@ done
 case $command in
 	install | sync | apply | uninstall | test)
 		;;
-	show | stage | preview | clean | check | check-tools)
+	show | stage | preview | clean | check)
 		if [ "$dry_run" = yes ]; then
 			printf 'home: %s does not take --dry-run\n' \
 				"$command" >&2
@@ -712,7 +704,7 @@ case $command in
 		;;
 	help)
 		if [ -n "$selected" ]; then
-			printf 'home: help takes no repository names\n' >&2
+			printf 'home: help takes no module names\n' >&2
 			exit 2
 		fi
 		;;
@@ -723,10 +715,10 @@ case $command in
 		;;
 esac
 
-# Continuation is a command policy, independent of concern composition roles.
+# Continuation is a command policy, independent of module composition roles.
 failure_policy=selection
 case $command in
-	stage) failure_policy=collect ;;
+	stage | check) failure_policy=collect ;;
 	install | apply) failure_policy=stop ;;
 esac
 
@@ -734,7 +726,4 @@ repos=
 [ "$command" = help ] || repos=$(resolve_repos)
 operation_repos=$repos
 
-case $command in
-	check-tools) cmd_check_tools ;;
-	*) "cmd_${command}" ;;
-esac
+"cmd_${command}"

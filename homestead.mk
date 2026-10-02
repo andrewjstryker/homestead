@@ -1,8 +1,8 @@
-# protocol.mk -- the shared home concern protocol
+# homestead.mk -- shared Homestead module build and lifecycle rules
 #
 # src is the first-party declaration. Every unclaimed non-hidden path below it
 # has the same relative path below stage, except that a final .m4 suffix is
-# removed. Concerns claim inputs and publish outputs for other transformations.
+# removed. Modules claim inputs and publish outputs for other transformations.
 # vendor is the third-party declaration: mapped namespace directories below it
 # are installed directly and are never copied into stage. Dot-prefixed paths in
 # either tree, and unmapped vendor directories such as vendor/build, are private.
@@ -20,6 +20,17 @@ endif
 .DEFAULT_GOAL := help
 .DELETE_ON_ERROR:
 .SILENT:
+
+# Public operations in workflow order; internal gates are not user commands.
+.PHONY: help #> Show this help message
+.PHONY: show #> Show resolved variables and manifest paths
+.PHONY: check #> Run full preflight without staging or installing
+.PHONY: stage #> Prune and incrementally realize the complete staged manifest
+.PHONY: preview #> Stage, then report files install would create or overwrite
+.PHONY: install #> Stage and install every declared destination namespace
+.PHONY: sync #> Synchronize optional runtime or network state
+.PHONY: uninstall #> Remove links still ours and files matching their latest receipt MD5
+.PHONY: clean #> Remove the staging directory
 
 define nl
 
@@ -60,7 +71,7 @@ MD5SUM ?= $(shell command -v md5sum)
 m4_vars ?=
 
 # Tool lists contain variable names rather than commands. Wrappers extend the
-# phase in which a tool is first required; the aggregate is diagnostic only.
+# phase in which a tool is first required; check diagnoses every phase.
 stage_tools   ?=
 install_tools ?=
 uninstall_tools ?=
@@ -106,7 +117,7 @@ export M4_CONTEXT_FILE = ${m4_context}
 
 define check_tools
 	$(if $(call missing_tools,$1),\
-	  $(error Missing tools needed to $2: $(call missing_tools,$1)))
+	  $(warning Missing tools needed to $2: $(call missing_tools,$1))false,:)
 endef
 
 .PHONY: check-required-inputs check-stage-tool-paths
@@ -115,10 +126,9 @@ endef
 check-uninstall-tools:
 	$(call check_tools,${effective_uninstall_tools},uninstall)
 
-.PHONY: check-tools #> Check every declared tool requirement
 check-required-inputs:
 	$(if ${missing_inputs},\
-	  $(error Missing required inputs needed to stage: ${missing_inputs}))
+	  $(warning Missing required inputs needed to stage: ${missing_inputs})false,:)
 
 check-stage-tool-paths:
 	$(call check_tools,${effective_stage_tools},stage)
@@ -130,8 +140,6 @@ check-install-tools:
 
 check-sync-tools:
 	$(call check_tools,${effective_sync_tools},sync)
-
-check-tools: check-stage-tool-paths check-install-tools check-sync-tools check-uninstall-tools
 
 # Source declaration and staged manifest --------------------------------------
 
@@ -199,7 +207,6 @@ ifneq ($(strip ${staged_files}),)
 $(sort ${staged_files}): | prune
 endif
 
-.PHONY: stage #> Prune and incrementally realize the complete staged manifest
 stage: prune ${staged_files}
 	$(if ${staged_dirs},mkdir -p ${staged_dirs},:)
 	${PROTOCOL_BIN}/validate-stage '${stage}' ${stage_expected_dirs} -- ${stage_expected_files}
@@ -243,7 +250,7 @@ declared_by = $(if $(filter $1,${vendor_files}),${vendor}/$1,$(if $(filter $1,${
 mode_of     = $(if $(shell test -x '$(call declared_by,$1)' && echo x),0700,0600)
 
 # A link names its manifest path. link_of adapts that path to the legacy place
-# the application insists on; concerns override it when the default
+# the application insists on; modules override it when the default
 # ~/.<basename> convention does not fit.
 link_of = ${HOME}/.$(notdir $1)
 
@@ -260,16 +267,17 @@ declaration_parents = $(if $(filter ./ /,$(dir $1)),,\
   $(patsubst %/,%,$(dir $1)) \
   $(call declaration_parents,$(patsubst %/,%,$(dir $1))))
 
-.PHONY: check-declarations #> Reject conflicting declared manifest paths
+.PHONY: check-declarations
 check-declarations:
 	$(eval homestead_decl_files := ${stage_files} ${vendor_files})
 	$(eval homestead_decl_duplicates := $(call declaration_duplicates,${homestead_decl_files}))
-	$(if ${homestead_decl_duplicates},$(error Duplicate manifest files: ${homestead_decl_duplicates}))
+	$(if ${homestead_decl_duplicates},$(warning Duplicate manifest files: ${homestead_decl_duplicates}))
 	$(eval homestead_decl_dirs := $(sort \
 	  $(patsubst ${stage}/%,%,${staged_dirs}) \
 	  $(foreach f,${homestead_decl_files},$(call declaration_parents,$f))))
 	$(eval homestead_decl_conflicts := $(filter ${homestead_decl_files},${homestead_decl_dirs}))
-	$(if ${homestead_decl_conflicts},$(error Manifest paths declared as both file and directory: ${homestead_decl_conflicts}))
+	$(if ${homestead_decl_conflicts},$(warning Manifest paths declared as both file and directory: ${homestead_decl_conflicts}))
+	$(if ${homestead_decl_duplicates}${homestead_decl_conflicts},false,:)
 
 # Transfer --------------------------------------------------------------------
 
@@ -299,14 +307,12 @@ endef
 
 transfer = $(call transfer_stage,$1) $(call transfer_vendor,$1)
 
-.PHONY: preview #> Stage, then report files install would create or overwrite
 preview: stage check-install-tools
 	$(call transfer,--dry-run)
 	$(foreach l,${effective_links},\
 	    DRY_RUN=1 ${PROTOCOL_BIN}/ensure-link.sh \
 	      '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
 
-.PHONY: install #> Stage and install every declared destination namespace
 install: stage check-install-tools
 	$(if ${DRY_RUN},:,umask 077; mkdir -p '$(dir ${receipt_file})'; : >> '${receipt_file}')
 	$(call transfer,$(if ${DRY_RUN},--dry-run))
@@ -327,16 +333,13 @@ remove-installed: before-uninstall
 
 after-uninstall: remove-installed
 
-.PHONY: uninstall #> Remove links still ours and files matching their latest receipt MD5
 uninstall: after-uninstall
 
 # Interface -------------------------------------------------------------------
 
-.PHONY: help #> Show this help message
 help:
 	${PROTOCOL_BIN}/help ${MAKEFILE_LIST}
 
-.PHONY: show #> Show resolved variables and manifest paths
 show:
 	printf 'Environment:\n'
 	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR,\
@@ -358,7 +361,7 @@ show:
 
 # Stable tab-separated records for the collection driver. Unlike show, every
 # manifest/link record has fixed fields and inspect never stages or mutates.
-.PHONY: inspect #> Emit machine-readable effective manifest records
+.PHONY: inspect
 inspect:
 	$(foreach f,${files},\
 	  printf 'file\t%s\t%s\t%s\t%s\n' '$(call mode_of,$f)' \
@@ -372,13 +375,16 @@ inspect:
 fragment-files:
 	$(foreach f,$(filter config/env.d/%.sh,${files}),printf '%s\n' '$(call manifest_of,$f)';${nl})
 
-.PHONY: check #> Stage and run concern-defined checks
-check: stage
+# Keep going across independent prerequisites to report all preflight failures.
+# Recursive Make preserves caller variables and the parallel jobserver.
+.PHONY: check-prerequisites
+check-prerequisites:
+	+$(MAKE) --no-print-directory --keep-going check-stage-tools check-install-tools check-sync-tools check-uninstall-tools
+
+check: check-prerequisites
 	:
 
-.PHONY: sync #> Synchronize optional runtime or network state
 sync: check-sync-tools
 
-.PHONY: clean #> Remove the staging directory
 clean:
 	rm -rf '${stage}'
