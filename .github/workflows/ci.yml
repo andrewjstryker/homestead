@@ -31,4 +31,4 @@ jobs:
       - name: Lint
         run: make lint
       - name: Test
-        run: make test
+        run: bats tests
