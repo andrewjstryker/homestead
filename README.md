@@ -66,3 +66,7 @@ integration boundaries; use controlled failures to exercise our error handling.
 Avoid duplicating tool semantics or checking private implementation details
 when an observable result can establish the guarantee. Application tests belong
 to the module or configuration collection.
+
+CI runs `make lint` and `make test` on Ubuntu 24.04 for every pull request to
+`main` and every push to `main`. Repository maintainers can find branch protection
+setup in the [administration guide](.github/README.md).
