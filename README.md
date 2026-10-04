@@ -9,7 +9,7 @@ and coordination across modules.
 
 Keep a pinned checkout of Homestead at `_homestead/` in your project, either as
 a Git submodule or a local checkout. No global installation is required. A
-module's Makefile includes the protocol directly:
+module's Makefile includes Homestead directly:
 
 ```make
 include _homestead/homestead.mk

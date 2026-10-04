@@ -8,7 +8,7 @@ between modules and the collection driver. Setup and examples belong in the
 
 ## Declarations
 
-The module chooses its protocol include path and must not invoke the driver.
+The module chooses its Homestead include path and must not invoke the driver.
 Default roots are `src`, `stage`, and `vendor`. Set alternate roots and
 `required_inputs`, `claimed_sources`, and `claimed_outputs` before inclusion.
 
@@ -42,18 +42,18 @@ Files in `src/bin` must be executable; installed files receive `0600` or `0700`.
 Caller inputs use uppercase names with `?=` for defaults; module declarations
 use lowercase names. `required_inputs` names nonempty staging values exported
 to recipes. Tool lists `stage_tools`, `install_tools`, `sync_tools`, and
-`uninstall_tools` name tool variables, not commands. The protocol adds `M4` for
+`uninstall_tools` name tool variables, not commands. Homestead adds `M4` for
 ordinary templates, `RSYNC` for installation, and `MD5SUM` for removal. Tool
 gates require nonempty values; executable capabilities are module-owned checks.
 
 Ordinary m4 outputs receive persistent XDG roots, `BIN_DIR`, required inputs,
-and names in `m4_vars` as `M4_NAME`. Changes to these values or renderer settings
+and names in `m4_vars` as `M4_NAME`. Changes to these values or renderer settings (`M4` and module-owned `m4_flags`)
 invalidate those outputs. Other file dependencies remain explicit. Render values
 cannot contain newline or NUL. `show_vars` adds named values to diagnostics.
 
 ## Targets and extensions
 
-The protocol supplies `help`, `show`, `check`, `stage`, `preview`, `install`,
+Homestead supplies `help`, `show`, `check`, `stage`, `preview`, `install`,
 `sync`, `uninstall`, and `clean`. Their required lifecycle behavior is below.
 `apply` is driver-owned; `test` is an optional module target run by the driver.
 
@@ -70,16 +70,17 @@ ancestors of outputs. Private paths and their otherwise empty ancestors are exem
 
 ### Extensions
 
-Extend lifecycle targets with prerequisites and preserve protocol recipes.
-Declared public output recipes run after `prune` through order-only dependencies;
+Extend lifecycle targets with prerequisites and preserve Homestead recipes.
+Declared public output recipes depend order-only on their parent directories
+and `prune`; Homestead creates those directories after preflight and pruning.
 `prune` depends on staging preflight. Module-owned intermediate recipes and
 other staging mutations must also depend on `prune`. Sibling prerequisites have
 no ordering guarantee.
 
 Custom transformations own complete dependency tracking, including imported
 files and changes to compiler settings, and must fail when generation fails.
-They must create parent directories and set the output's executable distinction.
-The protocol enables `.DELETE_ON_ERROR` for changed outputs of failed recipes.
+They must set the output's executable distinction.
+Homestead enables `.DELETE_ON_ERROR` for changed outputs of failed recipes.
 
 Output validation belongs in staging rules with explicit output dependencies.
 Behavioral tests belong in `test`. Checks required by an action must gate that
@@ -92,7 +93,7 @@ maps each to its location, defaulting to `${HOME}/.<basename>`.
 
 Installation compares content and preserves destinations outside the manifest.
 Vendored symlinks install as regular files. Successful namespace transfers append
-ownership records, including unchanged files, to `.homestead/receipt` by default.
+ownership records, including unchanged files, to the fixed `.homestead/receipt` location.
 Uninstall uses the latest MD5 per destination without staging: matching regular
 files are removed, while modified files and replacement symlinks are preserved.
 Directories are not receipt-owned. Missing or malformed receipts fail removal;

@@ -113,14 +113,14 @@ stage_tools += FENNEL
 include _homestead/homestead.mk
 
 stage/config/nvim/init.lua: src/config/nvim/init.fnl
-	mkdir -p '$(@D)'
 	'${FENNEL}' --compile '$<' > '$@'
 	chmod 0600 '$@'
 ```
 
 For a small test input, use `{:answer 42}`. Run `make check`, then `make stage`.
 The `.fnl` file stays an input; the generated `.lua` joins the normal installation
-manifest. No change to the driver is needed.
+manifest. Homestead creates the public output's parent directory before the
+recipe runs. No change to the driver is needed.
 
 Add dependencies for imported macros or other compile-time files. Compiler flags
 and other non-file inputs need your own rebuild tracking; m4's tracking does not
