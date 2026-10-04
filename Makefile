@@ -5,18 +5,18 @@ SHELL := /bin/sh
 help:
 	@printf '%s\n' 'test  Run isolated lifecycle and driver tests' 'lint  Check shell syntax and ShellCheck warnings'
 
+BATS ?= bats
+
+# Override TESTS to run one file; BATS_FLAGS accepts filters and runner options.
+TESTS ?= tests
+BATS_FLAGS ?=
 test:
-	@sh tests/graph.sh
-	@sh tests/preflight.sh
-	@sh tests/declarations.sh
-	@sh tests/staging.sh
-	@sh tests/driver.sh
-	@sh tests/failures.sh
-	@sh tests/receipts.sh
+	@$(BATS) $(BATS_FLAGS) $(TESTS)
 
 lint:
-	@for script in home bin/* tests/*.sh; do sh -n "$$script" || exit; done
-	@shellcheck -S warning home bin/* tests/*.sh
+	@for script in home bin/*; do sh -n "$$script" || exit; done
+	@bash -n tests/test_helper.bash
+	@shellcheck -x -S warning home bin/* tests/*.bats tests/*.bash
 
 version:
 	@cat VERSION

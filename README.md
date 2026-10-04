@@ -47,7 +47,22 @@ make test
 make lint
 ```
 
-Tests use temporary directories without network access or installation into
-your home. They require GNU-compatible `chmod --reference`, `find -mindepth`,
-`stat -c`, and `cp -p`. Lint additionally requires ShellCheck. Application tests
-belong to the module or configuration collection.
+Tests require Bats Core (1.10+) and Bash in addition to the runtime tools.
+Each case uses its own temporary directory and isolated home/XDG roots, without
+network access. They also require GNU-compatible `chmod --reference`,
+`find -mindepth`, `stat -c`, `touch -t`, and `cp -p`. Lint requires ShellCheck.
+
+Run a file or select named behaviors with:
+
+```sh
+make test TESTS=tests/receipts.bats
+make test BATS_FLAGS='--filter preflight'
+```
+
+Tests cover Homestead's declarations, dependency graph, lifecycle safety,
+receipts, and collection policies. Keep a case when a plausible change to
+Homestead could break the behavior it asserts. Use real Make and rsync for
+integration boundaries; use controlled failures to exercise our error handling.
+Avoid duplicating tool semantics or checking private implementation details
+when an observable result can establish the guarantee. Application tests belong
+to the module or configuration collection.
