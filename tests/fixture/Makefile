@@ -1,7 +1,5 @@
-PROTOCOL_MK ?= ../../protocol.mk
+HOMESTEAD_MK ?= ../../homestead.mk
 
-FIXTURE_CONFIG_ROOT ?= ${XDG_CONFIG_HOME}
-config_root := ${FIXTURE_CONFIG_ROOT}
 
 CONTEXT_INPUT ?= required-context
 required_inputs := CONTEXT_INPUT
@@ -24,10 +22,9 @@ stage_tools   := STAGE_TOOL TRANSFORM_TOOL
 install_tools := INSTALL_TOOL
 sync_tools    := SYNC_TOOL
 
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 
 ${stage}/config/claimed: ${src}/config/claimed.upper
-	mkdir -p '$(@D)'
 	'${TRANSFORM_TOOL}' '[:lower:]' '[:upper:]' < '$<' > '$@'
 	chmod --reference='$<' '$@'
 

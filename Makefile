@@ -6,6 +6,7 @@ help:
 	@printf '%s\n' 'test  Run isolated lifecycle and driver tests' 'lint  Check shell syntax and ShellCheck warnings'
 
 test:
+	@sh tests/graph.sh
 	@sh tests/preflight.sh
 	@sh tests/declarations.sh
 	@sh tests/staging.sh

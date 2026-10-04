@@ -5,8 +5,6 @@ set -eu
 
 output=${1:?usage: m4-context <output>}
 
-mkdir -p "$(dirname "$output")"
-
 tmp="${output}.tmp.$$"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 

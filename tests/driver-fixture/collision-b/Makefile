@@ -1,1 +1,1 @@
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}

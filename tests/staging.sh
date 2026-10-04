@@ -5,7 +5,7 @@ here=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 test_root=$(mktemp -d)
 fixture=${test_root}/fixture
 cp -R "${here}/fixture" "$fixture"
-export PROTOCOL_MK="${here}/../protocol.mk"
+export HOMESTEAD_MK="${here}/../homestead.mk"
 rendered_source=${fixture}/src/bin/rendered-tool.m4
 plain_source=${fixture}/src/config/static.conf
 claimed_source=${fixture}/src/config/claimed.upper
@@ -81,7 +81,7 @@ test ! -e "${fixture}/stage/build/ignored"
 test -f "${m4_context}"
 grep -q '^ *FIXTURE_VALUE=rendered$' "${m4_context}"
 for variable in \
-	M4 M4FLAGS HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \
+	M4 m4_flags HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \
 	XDG_CACHE_HOME BIN_DIR CONTEXT_INPUT OPTIONAL_CONTEXT FIXTURE_VALUE; do
 	grep -q "^ *$variable=" "${m4_context}"
 done
@@ -91,7 +91,7 @@ inspection=$(make --no-print-directory -C "${fixture}" inspect)
 printf '%s\n' "${inspection}" | grep -q \
 	"^file${tab}0600${tab}stage/config/static.conf${tab}config/static.conf${tab}${HOME}/.config/static.conf$"
 custom_inspection=$(make --no-print-directory -C "${fixture}" inspect \
-	FIXTURE_CONFIG_ROOT="${test_root}/custom-config")
+	XDG_CONFIG_HOME="${test_root}/custom-config")
 printf '%s\n' "${custom_inspection}" | grep -q \
 	"^file${tab}0600${tab}stage/config/static.conf${tab}config/static.conf${tab}${test_root}/custom-config/static.conf$"
 
@@ -120,7 +120,7 @@ test "$(sed -n '3p' "${fixture}/stage/config/context.conf")" = \
 	"builder's context"
 make --no-print-directory -C "${fixture}" stage
 
-# Required inputs enter the render-variable set automatically; concerns add
+# Required inputs enter the render-variable set automatically; modules add
 # optional render values through m4_vars.
 sleep 1
 required_marker=${test_root}/required-marker
@@ -135,12 +135,12 @@ make --no-print-directory -C "${fixture}" stage
 # Each lifecycle phase checks only its declared tools. A failed stage preflight
 # happens before prune, so even parallel Make cannot mutate the staged tree.
 if make --no-print-directory -C "${fixture}" stage M4= \
-	 >"${test_root}/protocol-stage-tool" 2>&1; then
-	printf 'expected the protocol m4 requirement to survive immediate caller lists\n' >&2
+	 >"${test_root}/homestead-stage-tool" 2>&1; then
+	printf 'expected Homestead m4 requirement to survive immediate caller lists\n' >&2
 	exit 1
 fi
 grep -q 'Missing tools needed to stage: M4' \
-	"${test_root}/protocol-stage-tool"
+	"${test_root}/homestead-stage-tool"
 
 printf stale > "${fixture}/stage/config/stale"
 if make --no-print-directory -j4 -C "${fixture}" stage STAGE_TOOL= \
@@ -152,7 +152,7 @@ grep -q 'Missing tools needed to stage: STAGE_TOOL' "${test_root}/stage-tool"
 test -f "${fixture}/stage/config/stale"
 rm -f "${fixture}/stage/config/stale"
 
-# A concern-owned transformation can add its tool to the stage phase without
+# A module-owned transformation can add its tool to the stage phase without
 # creating a second preflight path.
 printf stale > "${fixture}/stage/config/stale"
 if make --no-print-directory -j4 -C "${fixture}" stage TRANSFORM_TOOL= \
@@ -169,12 +169,12 @@ make --no-print-directory -C "${fixture}" stage INSTALL_TOOL= SYNC_TOOL=
 make --no-print-directory -C "${fixture}" sync STAGE_TOOL= INSTALL_TOOL=
 
 if make --no-print-directory -C "${fixture}" install RSYNC= \
-	     DESTDIR="${test_root}" >"${test_root}/protocol-install-tool" 2>&1; then
-	printf 'expected the protocol rsync requirement to survive immediate caller lists\n' >&2
+	     DESTDIR="${test_root}" >"${test_root}/homestead-install-tool" 2>&1; then
+	printf 'expected Homestead rsync requirement to survive immediate caller lists\n' >&2
 	exit 1
 fi
 grep -q 'Missing tools needed to install: RSYNC' \
-	"${test_root}/protocol-install-tool"
+	"${test_root}/homestead-install-tool"
 
 if make --no-print-directory -C "${fixture}" install INSTALL_TOOL= \
      DESTDIR="${test_root}" >"${test_root}/install-tool" 2>&1; then
@@ -194,9 +194,9 @@ if make --no-print-directory -C "${fixture}" sync SYNC_TOOL= \
 fi
 grep -q 'Missing tools needed to sync: SYNC_TOOL' "${test_root}/sync-tool"
 
-if make --no-print-directory -C "${fixture}" check-tools SYNC_TOOL= \
+if make --no-print-directory -C "${fixture}" check SYNC_TOOL= \
      >"${test_root}/all-tools" 2>&1; then
-	printf 'expected the aggregate tool check to cover sync tools\n' >&2
+	printf 'expected the full preflight to cover sync tools\n' >&2
 	exit 1
 fi
 grep -q 'Missing tools needed to sync: SYNC_TOOL' "${test_root}/all-tools"
@@ -248,7 +248,7 @@ test -f "${fixture}/stage/config/claimed"
 test -f "${fixture}/stage/.build/input"
 test -f "${fixture}/stage/config/.private/input"
 
-# Validation runs after concern-added stage prerequisites, so a successful
+# Validation runs after module-added stage prerequisites, so a successful
 # recipe cannot smuggle an undeclared public file into installation.
 if make --no-print-directory -C "${fixture}" stage ROGUE_OUTPUT=1 \
 	>"${test_root}/rogue-output" 2>&1; then
@@ -302,4 +302,4 @@ test ! -e "${test_root}${HOME}/.local/bin/vendor-tool"
 
 trap - EXIT HUP INT TERM
 restore
-printf 'protocol staging and lifecycle: PASS\n'
+printf 'Homestead staging and lifecycle: PASS\n'

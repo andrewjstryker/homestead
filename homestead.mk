@@ -8,8 +8,7 @@
 # either tree, and unmapped vendor directories such as vendor/build, are private.
 
 homestead_mk := $(lastword ${MAKEFILE_LIST})
-PROTOCOL_MK  ?= ${homestead_mk}
-PROTOCOL_BIN ?= $(patsubst %/,%,$(dir ${PROTOCOL_MK}))/bin
+homestead_bin := $(patsubst %/,%,$(dir ${homestead_mk}))/bin
 
 ifeq ($(origin SHELL),default)
 SHELL := /bin/sh
@@ -56,10 +55,9 @@ export ${path_vars} ${required_inputs}
 
 # Installation history is independent of generated staging state. Staged
 # installs prefix the receipt location as well as payload destinations.
-RECEIPT ?= ${CURDIR}/.homestead/receipt
-$(call require_nonempty,RECEIPT)
-receipt_file = $(if ${DESTDIR},$(abspath ${DESTDIR}))$(abspath ${RECEIPT})
-receipt_destdir = $(if ${DESTDIR},$(abspath ${DESTDIR}))
+receipt_destdir := $(if ${DESTDIR},$(abspath ${DESTDIR}))
+receipt_dir := ${receipt_destdir}${CURDIR}/.homestead
+receipt_file := ${receipt_dir}/receipt
 
 DESTDIR ?=
 
@@ -76,15 +74,10 @@ stage_tools   ?=
 install_tools ?=
 uninstall_tools ?=
 sync_tools    ?=
-protocol_stage_tools   = $(if $(strip ${m4_sources}),M4)
-protocol_install_tools = RSYNC
-protocol_uninstall_tools = MD5SUM
-effective_stage_tools   = ${stage_tools} ${protocol_stage_tools}
-effective_install_tools = ${install_tools} ${protocol_install_tools}
-effective_uninstall_tools = ${uninstall_tools} ${protocol_uninstall_tools}
-effective_sync_tools    = ${sync_tools}
-tools = $(sort \
-  ${effective_stage_tools} ${effective_install_tools} ${effective_sync_tools} ${effective_uninstall_tools})
+homestead_stage_tools = ${stage_tools} $(if $(strip ${m4_sources}),M4)
+homestead_install_tools = ${install_tools} RSYNC
+homestead_uninstall_tools = ${uninstall_tools} MD5SUM
+tools = $(sort ${homestead_stage_tools} ${homestead_install_tools} ${sync_tools} ${homestead_uninstall_tools})
 
 missing_tools = $(strip $(foreach v,$1,$(if $(strip $($v)),,$v)))
 missing_inputs = $(strip \
@@ -105,41 +98,36 @@ m4_render_vars = $(sort ${m4_context_vars} ${m4_vars})
 m4_define_args = $(foreach v,${m4_render_vars},--define-context=$v=M4_$v)
 
 # Renderer identity and behavior invalidate templates but are not themselves
-# template variables. M4FLAGS is reserved for m4 options such as include paths.
+# template variables. m4_flags is reserved for m4 options such as include paths.
 m4_context_content = \
   M4=${M4}${nl} \
-  M4FLAGS=${M4FLAGS}${nl} \
+  m4_flags=${m4_flags}${nl} \
   HOME=${HOME}${nl} \
   $(foreach v,${m4_render_vars},$v=$($v)${nl})
 
 export M4_CONTEXT = ${m4_context_content}
 export M4_CONTEXT_FILE = ${m4_context}
 
-define check_tools
-	$(if $(call missing_tools,$1),\
-	  $(warning Missing tools needed to $2: $(call missing_tools,$1))false,:)
-endef
+# Diagnostics return a marker after reporting an error. Expanding the entire
+# list before failing lets full preflight report every phase in one Make graph.
+tool_errors = $(if $(call missing_tools,$1),\
+  $(warning Missing tools needed to $2: $(call missing_tools,$1))missing)
+input_errors = $(if ${missing_inputs},\
+  $(warning Missing required inputs needed to stage: ${missing_inputs})missing)
+stage_errors = ${declaration_errors} ${input_errors} $(call tool_errors,${homestead_stage_tools},stage)
 
-.PHONY: check-required-inputs check-stage-tool-paths
-.PHONY: check-stage-tools check-install-tools check-sync-tools
-.PHONY: check-uninstall-tools
-check-uninstall-tools:
-	$(call check_tools,${effective_uninstall_tools},uninstall)
-
-check-required-inputs:
-	$(if ${missing_inputs},\
-	  $(warning Missing required inputs needed to stage: ${missing_inputs})false,:)
-
-check-stage-tool-paths:
-	$(call check_tools,${effective_stage_tools},stage)
-
-check-stage-tools: check-declarations check-required-inputs check-stage-tool-paths
+.PHONY: check-stage-tools check-install-tools check-sync-tools check-uninstall-tools
+check-stage-tools:
+	$(if $(strip ${stage_errors}),false,:)
 
 check-install-tools:
-	$(call check_tools,${effective_install_tools},install)
+	$(if $(call tool_errors,${homestead_install_tools},install),false,:)
 
 check-sync-tools:
-	$(call check_tools,${effective_sync_tools},sync)
+	$(if $(call tool_errors,${sync_tools},sync),false,:)
+
+check-uninstall-tools:
+	$(if $(call tool_errors,${homestead_uninstall_tools},uninstall),false,:)
 
 # Source declaration and staged manifest --------------------------------------
 
@@ -159,91 +147,84 @@ rdirectories = $(wildcard $1*/) \
   $(foreach d,$(wildcard $1*/),$(call rdirectories,$d))
 
 source_excludes   := %~ %.orig %.rej
-discovered_sources = $(filter-out ${source_excludes},$(call rwildcard,${src}/,*))
-sources           = $(filter-out ${claimed_sources},${discovered_sources})
-source_dirs      = $(patsubst %/,%,$(call rdirectories,${src}/))
-m4_sources       = $(filter %.m4,${sources})
-plain_sources    = $(filter-out ${m4_sources},${sources})
+discovered_sources := $(filter-out ${source_excludes},$(call rwildcard,${src}/,*))
+sources           := $(filter-out ${claimed_sources},${discovered_sources})
+source_dirs      := $(patsubst %/,%,$(call rdirectories,${src}/))
+m4_sources       := $(filter %.m4,${sources})
+plain_sources    := $(filter-out ${m4_sources},${sources})
 
-staged_files = \
+staged_files := \
   $(patsubst ${src}/%,${stage}/%,${plain_sources}) \
   $(patsubst ${src}/%.m4,${stage}/%,${m4_sources}) \
   ${claimed_outputs}
-staged_dirs = $(patsubst ${src}/%,${stage}/%,${source_dirs})
-staged      = ${staged_dirs} ${staged_files}
+staged_dirs := $(patsubst ${src}/%,${stage}/%,${source_dirs})
 
-stage_files = $(patsubst ${stage}/%,%,${staged_files})
+stage_files := $(patsubst ${stage}/%,%,${staged_files})
 
-# The context reconciler runs before stage realizes its outputs. It replaces a
-# real private file only when the renderer or its expanded flags change. That
-# file is a normal prerequisite of every ordinary template, bridging values
-# which Make cannot otherwise see into its timestamp graph.
+# Build directories are real targets. Their timestamps never invalidate files.
+# Include output parents in pruning's declaration so pruning cannot remove a
+# directory Make has already observed as current.
+output_dirs := $(sort $(patsubst %/,%,$(dir ${staged_files})))
+build_dirs := $(sort ${staged_dirs} ${output_dirs} $(if ${m4_sources},${stage}/.build))
+
+.PHONY: prune
+prune: check-stage-tools
+	${homestead_bin}/prune '${stage}' ${staged_dirs} ${output_dirs} ${staged_files}
+
+ifneq ($(strip ${build_dirs}),)
+${build_dirs}: | prune
+	mkdir -p '$@'
+endif
+
+.SECONDEXPANSION:
+ifneq ($(strip ${staged_files}),)
+$(sort ${staged_files}): | prune $$(@D)
+endif
+
+# A reconciled context tracks non-file render inputs without making outputs phony.
 m4_context := ${stage}/.build/m4-context
-
 .PHONY: update-m4-context
-update-m4-context: check-stage-tools
-	$(if $(strip ${m4_sources}),${PROTOCOL_BIN}/m4-context '${m4_context}',:)
-
+ifneq ($(strip ${m4_sources}),)
+update-m4-context: | ${stage}/.build
+	${homestead_bin}/m4-context '${m4_context}'
+endif
 ${m4_context}: update-m4-context ;
 
 ${stage}/%: ${src}/%.m4 ${m4_context}
-	M4='${M4}' ${PROTOCOL_BIN}/gen '$@' '$<' ${M4FLAGS} ${m4_define_args}
+	M4='${M4}' ${homestead_bin}/gen '$@' '$<' ${m4_flags} ${m4_define_args}
 
 ${stage}/%: ${src}/%
-	mkdir -p '$(@D)'
 	cp -p '$<' '$@'
 
-# Pruning precedes every public staged path. The order-only edge keeps prune's
-# phony status from making otherwise-current outputs rebuild.
-.PHONY: prune
-prune: check-stage-tools
-	${PROTOCOL_BIN}/prune '${stage}' ${stage_expected}
-
-stage_expected = ${staged}
-stage_expected_dirs = ${staged_dirs}
-stage_expected_files = ${staged_files}
-
-ifneq ($(strip ${staged_files}),)
-$(sort ${staged_files}): | prune
-endif
-
-stage: prune ${staged_files}
-	$(if ${staged_dirs},mkdir -p ${staged_dirs},:)
-	${PROTOCOL_BIN}/validate-stage '${stage}' ${stage_expected_dirs} -- ${stage_expected_files}
+stage: prune ${staged_dirs} ${staged_files}
+	${homestead_bin}/validate-stage '${stage}' ${staged_dirs} -- ${staged_files}
 
 # Namespace mapping -----------------------------------------------------------
 
 namespaces := config data state cache bin
 
-# Vendored trees can be large. A single find per namespace avoids expanding a
-# recursive Make wildcard expression for every directory. As elsewhere in the
-# protocol, declaration paths containing whitespace are unsupported.
-vendor_sources = $(filter-out ${source_excludes},\
-  $(foreach n,${namespaces},$(shell \
-    if [ -d '${vendor}/$n' ]; then \
-      find '${vendor}/$n' -name '.*' -prune -o \
-        \( -type f -o -type l \) -print; \
-    fi)))
-declared_vendor_files = $(patsubst ${vendor}/%,%,${vendor_sources})
-vendor_files = ${declared_vendor_files}
+# Snapshot vendor discovery once, retaining empty namespace directories for transfer.
+vendor_dirs := $(patsubst %/,%,$(wildcard $(addsuffix /,$(addprefix ${vendor}/,${namespaces}))))
+vendor_sources := $(if ${vendor_dirs},$(filter-out ${source_excludes},$(shell \
+  find $(foreach d,${vendor_dirs},'$d') -name '.*' -prune -o \
+    \( -type f -o -type l \) -print)))
+vendor_files := $(patsubst ${vendor}/%,%,${vendor_sources})
+files := ${stage_files} ${vendor_files}
+stage_namespaces := $(foreach n,${namespaces},$(if $(filter $n $n/%,${stage_files} $(patsubst ${stage}/%,%,${staged_dirs})),$n))
+vendor_namespaces := $(patsubst ${vendor}/%,%,${vendor_dirs})
 
-# The effective manifest is generated first-party output plus mapped vendored
-# payload. vendor/build and all other unmapped vendor paths are build inputs.
-files = ${stage_files} ${vendor_files}
-effective_links = ${links}
-
-config_root ?= ${XDG_CONFIG_HOME}
-data_root   ?= ${XDG_DATA_HOME}
-state_root  ?= ${XDG_STATE_HOME}
-cache_root  ?= ${XDG_CACHE_HOME}
-bin_root    ?= ${BIN_DIR}
+config_root_variable := XDG_CONFIG_HOME
+data_root_variable := XDG_DATA_HOME
+state_root_variable := XDG_STATE_HOME
+cache_root_variable := XDG_CACHE_HOME
+bin_root_variable := BIN_DIR
 
 namespace_of = $(firstword $(subst /, ,$1))
 relative_of  = $(patsubst $(call namespace_of,$1)/%,%,$1)
-root_of      = $($(call namespace_of,$1)_root)
+root_of      = $($($(call namespace_of,$1)_root_variable))
 installed_of = $(call root_of,$1)/$(call relative_of,$1)
 
-claimed_files = $(patsubst ${stage}/%,%,${claimed_outputs})
+claimed_files := $(patsubst ${stage}/%,%,${claimed_outputs})
 source_of   = $(firstword $(wildcard ${src}/$1 ${src}/$1.m4))
 manifest_of = $(if $(filter $1,${vendor_files}),${vendor}/$1,${stage}/$1)
 declared_by = $(if $(filter $1,${vendor_files}),${vendor}/$1,$(if $(filter $1,${claimed_files}),${stage}/$1,$(call source_of,$1)))
@@ -267,17 +248,16 @@ declaration_parents = $(if $(filter ./ /,$(dir $1)),,\
   $(patsubst %/,%,$(dir $1)) \
   $(call declaration_parents,$(patsubst %/,%,$(dir $1))))
 
+declaration_duplicate_files := $(strip $(call declaration_duplicates,${files}))
+declaration_dirs := $(sort $(patsubst ${stage}/%,%,${staged_dirs}) $(foreach f,${files},$(call declaration_parents,$f)))
+declaration_conflicts := $(filter ${files},${declaration_dirs})
+declaration_errors = \
+  $(if ${declaration_duplicate_files},$(warning Duplicate manifest files: ${declaration_duplicate_files})duplicate) \
+  $(if ${declaration_conflicts},$(warning Manifest paths declared as both file and directory: ${declaration_conflicts})conflict)
+
 .PHONY: check-declarations
 check-declarations:
-	$(eval homestead_decl_files := ${stage_files} ${vendor_files})
-	$(eval homestead_decl_duplicates := $(call declaration_duplicates,${homestead_decl_files}))
-	$(if ${homestead_decl_duplicates},$(warning Duplicate manifest files: ${homestead_decl_duplicates}))
-	$(eval homestead_decl_dirs := $(sort \
-	  $(patsubst ${stage}/%,%,${staged_dirs}) \
-	  $(foreach f,${homestead_decl_files},$(call declaration_parents,$f))))
-	$(eval homestead_decl_conflicts := $(filter ${homestead_decl_files},${homestead_decl_dirs}))
-	$(if ${homestead_decl_conflicts},$(warning Manifest paths declared as both file and directory: ${homestead_decl_conflicts}))
-	$(if ${homestead_decl_duplicates}${homestead_decl_conflicts},false,:)
+	$(if $(strip ${declaration_errors}),false,:)
 
 # Transfer --------------------------------------------------------------------
 
@@ -288,36 +268,42 @@ rsync_flags := \
   --chmod=u+rw,go-rwx
 
 define transfer_stage
-$(foreach n,${namespaces},\
-  $(if $(wildcard ${stage}/$n/.),\
-    RSYNC='${RSYNC}' DRY_RUN='$1' ${PROTOCOL_BIN}/transfer \
-      '${receipt_file}' '$(abspath $(${n}_root))' '${receipt_destdir}' \
-      '${stage}/$n/' ${rsync_flags} $1 --exclude='.*';${nl}))
+$(foreach n,${stage_namespaces},\
+    RSYNC='${RSYNC}' DRY_RUN='$1' ${homestead_bin}/transfer \
+      '${receipt_file}' '$(abspath $(call root_of,$n))' '${receipt_destdir}' \
+      '${stage}/$n/' ${rsync_flags} $1 --exclude='.*';${nl})
 endef
 
 # Vendored symlinks are dereferenced so the installed manifest remains a set of
 # ordinary files with independently comparable content.
 define transfer_vendor
-$(foreach n,${namespaces},\
-  $(if $(wildcard ${vendor}/$n/.),\
-    RSYNC='${RSYNC}' DRY_RUN='$1' ${PROTOCOL_BIN}/transfer \
-      '${receipt_file}' '$(abspath $(${n}_root))' '${receipt_destdir}' \
-      '${vendor}/$n/' ${rsync_flags} --copy-links $1 --exclude='.*';${nl}))
+$(foreach n,${vendor_namespaces},\
+    RSYNC='${RSYNC}' DRY_RUN='$1' ${homestead_bin}/transfer \
+      '${receipt_file}' '$(abspath $(call root_of,$n))' '${receipt_destdir}' \
+      '${vendor}/$n/' ${rsync_flags} --copy-links $1 --exclude='.*';${nl})
 endef
 
 transfer = $(call transfer_stage,$1) $(call transfer_vendor,$1)
 
 preview: stage check-install-tools
 	$(call transfer,--dry-run)
-	$(foreach l,${effective_links},\
-	    DRY_RUN=1 ${PROTOCOL_BIN}/ensure-link.sh \
+	$(foreach l,${links},\
+	    DRY_RUN=1 ${homestead_bin}/ensure-link.sh \
 	      '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
 
+# Receipt creation is an installation dependency, omitted for dry runs.
+ifeq ($(strip ${DRY_RUN}),)
+${receipt_dir}: | stage check-install-tools
+	umask 077; mkdir -p '$@'
+${receipt_file}: | ${receipt_dir}
+	umask 077; : >> '$@'
+install: | ${receipt_file}
+endif
+
 install: stage check-install-tools
-	$(if ${DRY_RUN},:,umask 077; mkdir -p '$(dir ${receipt_file})'; : >> '${receipt_file}')
 	$(call transfer,$(if ${DRY_RUN},--dry-run))
-	$(foreach l,${effective_links},\
-	    DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/ensure-link.sh \
+	$(foreach l,${links},\
+	    DRY_RUN='${DRY_RUN}' ${homestead_bin}/ensure-link.sh \
 	      '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
 
 # Uninstall uses installation history, never rebuilding the current declaration.
@@ -325,10 +311,10 @@ install: stage check-install-tools
 before-uninstall: check-uninstall-tools
 
 remove-installed: before-uninstall
-	MD5SUM='${MD5SUM}' DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/remove-receipt \
+	MD5SUM='${MD5SUM}' DRY_RUN='${DRY_RUN}' ${homestead_bin}/remove-receipt \
 	  '${receipt_file}' '${receipt_destdir}'
-	$(foreach l,${effective_links},\
-	  DRY_RUN='${DRY_RUN}' ${PROTOCOL_BIN}/remove-link.sh \
+	$(foreach l,${links},\
+	  DRY_RUN='${DRY_RUN}' ${homestead_bin}/remove-link.sh \
 	    '$(call installed_of,$l)' '${DESTDIR}$(call link_of,$l)';${nl})
 
 after-uninstall: remove-installed
@@ -338,14 +324,14 @@ uninstall: after-uninstall
 # Interface -------------------------------------------------------------------
 
 help:
-	${PROTOCOL_BIN}/help ${MAKEFILE_LIST}
+	${homestead_bin}/help ${MAKEFILE_LIST}
 
 show:
 	printf 'Environment:\n'
 	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR,\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	printf '  %-20s %s\n' 'DESTDIR' '${DESTDIR}'
-	printf '  %-20s %s\n' 'RECEIPT' '${receipt_file}'
+	printf '  %-20s %s\n' 'receipt' '${receipt_file}'
 	$(foreach v,${show_vars},\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	$(foreach v,${tools},\
@@ -355,7 +341,7 @@ show:
 	printf '\nManifest:\n'
 	$(foreach f,${files},\
 	  printf '  file  %-6s %s\n' '$(call mode_of,$f)' '$(call installed_of,$f)';${nl})
-	$(foreach l,${effective_links},\
+	$(foreach l,${links},\
 	  printf '  link         %s -> %s\n' '$(call link_of,$l)' \
 	    '$(call installed_of,$l)';${nl})
 
@@ -366,7 +352,7 @@ inspect:
 	$(foreach f,${files},\
 	  printf 'file\t%s\t%s\t%s\t%s\n' '$(call mode_of,$f)' \
 	    '$(call manifest_of,$f)' '$f' '$(call installed_of,$f)';${nl})
-	$(foreach l,${effective_links},\
+	$(foreach l,${links},\
 	  printf 'link\t-\t-\t%s\t%s\t%s\n' '$l' '$(call link_of,$l)' \
 	    '$(call installed_of,$l)';${nl})
 
@@ -375,11 +361,12 @@ inspect:
 fragment-files:
 	$(foreach f,$(filter config/env.d/%.sh,${files}),printf '%s\n' '$(call manifest_of,$f)';${nl})
 
-# Keep going across independent prerequisites to report all preflight failures.
-# Recursive Make preserves caller variables and the parallel jobserver.
 .PHONY: check-prerequisites
 check-prerequisites:
-	+$(MAKE) --no-print-directory --keep-going check-stage-tools check-install-tools check-sync-tools check-uninstall-tools
+	$(if $(strip ${stage_errors} \
+	  $(call tool_errors,${homestead_install_tools},install) \
+	  $(call tool_errors,${sync_tools},sync) \
+	  $(call tool_errors,${homestead_uninstall_tools},uninstall)),false,:)
 
 check: check-prerequisites
 	:

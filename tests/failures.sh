@@ -6,40 +6,40 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 export HOME=$work/home XDG_CONFIG_HOME=$work/config XDG_DATA_HOME=$work/data
 export XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache BIN_DIR=$work/bin
-export HOMESTEAD_ROOT=$work PROTOCOL_MK=$root/protocol.mk CONFIG_ENV=$work/absent
-export CONCERNS_FIRST=floor CONCERNS_LAST='shell
+export HOMESTEAD_ROOT=$work HOMESTEAD_MK=$root/homestead.mk CONFIG_ENV=$work/absent
+export MODULES_FIRST=floor MODULES_LAST='shell
 other-shell'
 export EVENTS=$work/events
 home=$root/home
-for concern in floor middle other shell other-shell; do
-    mkdir -p "$work/$concern/src/config/env.d"
-    printf '%s\n' "$concern" >"$work/$concern/src/config/env.d/$concern.sh"
-    cat >"$work/$concern/Makefile" <<'MAKEFILE'
-concern := $(notdir ${CURDIR})
+for module in floor middle other shell other-shell; do
+    mkdir -p "$work/$module/src/config/env.d"
+    printf '%s\n' "$module" >"$work/$module/src/config/env.d/$module.sh"
+    cat >"$work/$module/Makefile" <<'MAKEFILE'
+module := $(notdir ${CURDIR})
 stage_tools += FIXTURE_TOOL
-FIXTURE_TOOL = $(if $(filter ${concern},${FAIL_PREFLIGHT}),,/bin/true)
-include ${PROTOCOL_MK}
+FIXTURE_TOOL = $(if $(filter ${module},${FAIL_PREFLIGHT}),,/bin/true)
+include ${HOMESTEAD_MK}
 .PHONY: observe-stage observe-install observe-sync observe-inspect
 observe-stage: check-stage-tools
-	printf 'stage %s\n' '${concern}' >> "$${EVENTS}"
+	printf 'stage %s\n' '${module}' >> "$${EVENTS}"
 	printf '%s\n' "$${ENV_FRAGMENTS-}" > received-fragments
-	$(if $(filter ${concern},${FAIL_STAGE}),false,:)
+	$(if $(filter ${module},${FAIL_STAGE}),false,:)
 stage: observe-stage
 observe-install: stage check-install-tools
-	printf 'install %s\n' '${concern}' >> "$${EVENTS}"
-	$(if $(filter ${concern},${FAIL_INSTALL}),false,:)
+	printf 'install %s\n' '${module}' >> "$${EVENTS}"
+	$(if $(filter ${module},${FAIL_INSTALL}),false,:)
 install: observe-install
 observe-sync: check-sync-tools
-	printf 'sync %s\n' '${concern}' >> "$${EVENTS}"
+	printf 'sync %s\n' '${module}' >> "$${EVENTS}"
 sync: observe-sync
 observe-inspect:
-	printf 'inspect %s\n' '${concern}' >> "$${EVENTS}"
-	$(if $(filter ${concern},${FAIL_INSPECT}),false,:)
+	printf 'inspect %s\n' '${module}' >> "$${EVENTS}"
+	$(if $(filter ${module},${FAIL_INSPECT}),false,:)
 inspect: observe-inspect
 MAKEFILE
 done
 
-# Stage collects failures in every phase, including first and last concerns.
+# Stage collects failures in every phase, including first and last modules.
 for selection in implicit explicit; do
     set --
     if [ "$selection" = explicit ]; then set -- floor middle other shell other-shell; fi
@@ -57,7 +57,7 @@ for selection in implicit explicit; do
         grep -q "FAILED ($expected): floor middle" "$work/out"
         grep -qx 'stage other' "$EVENTS"
         grep -qx 'stage other-shell' "$EVENTS"
-        # Each eligible concern stages once, even when composed consumers exist.
+        # Each eligible module stages once, even when composed consumers exist.
         test "$(grep -c '^stage other$' "$EVENTS")" -eq 1
         test "$(grep -c '^stage other-shell$' "$EVENTS")" -eq 1
         if grep -E '/(floor|middle)/' "$work/other-shell/received-fragments"; then exit 1; fi
@@ -93,7 +93,7 @@ grep -qx 'stage other' "$EVENTS"
 if grep -q '^inspect ' "$EVENTS"; then exit 1; fi
 
 # Without consumers, installation can encounter a staging error inside Make's
-# install target; it must still stop before the next concern.
+# install target; it must still stop before the next module.
 : > "$EVENTS"
 if FAIL_STAGE=middle "$home" install middle other >"$work/install-no-consumer" 2>&1; then exit 1; fi
 grep -q 'FAILED (install): middle' "$work/install-no-consumer"

@@ -1,4 +1,4 @@
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 
 .PHONY: fail-check
 fail-check:

@@ -1,4 +1,4 @@
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 
 .PHONY: maybe-fail-install optional-sync
 maybe-fail-install:

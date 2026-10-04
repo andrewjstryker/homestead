@@ -4,7 +4,7 @@ here=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 root=$(CDPATH='' cd -- "$here/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-export PROTOCOL_MK=$root/homestead.mk
+export HOMESTEAD_MK=$root/homestead.mk
 export HOME=$work/home XDG_CONFIG_HOME=$work/config XDG_DATA_HOME=$work/data
 export XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache BIN_DIR=$work/bin
 
@@ -17,7 +17,7 @@ cat > "$work/module/Makefile" <<'MAKEFILE'
 required_inputs = REQUIRED_VALUE
 SYNC_TOOL ?= /bin/true
 sync_tools = SYNC_TOOL
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 MAKEFILE
 
 # Even parallel preflight reports independent failures without changing stage.

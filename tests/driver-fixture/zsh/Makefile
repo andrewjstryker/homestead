@@ -1,5 +1,5 @@
 claimed_outputs := stage/config/composed.conf
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 
 ZSH_TOOL ?= /bin/true
 stage_tools += ZSH_TOOL

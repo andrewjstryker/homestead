@@ -4,25 +4,25 @@ here=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 root=$(CDPATH='' cd -- "$here/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-concern=$work/concern
-mkdir -p "$concern/src/config" "$concern/vendor/data" "$concern/src/bin"
-export PROTOCOL_MK=$root/protocol.mk
+module=$work/module
+mkdir -p "$module/src/config" "$module/vendor/data" "$module/src/bin"
+export HOMESTEAD_MK=$root/homestead.mk
 export HOME=$work/home
 export XDG_CONFIG_HOME=$HOME/config XDG_DATA_HOME=$HOME/data
 export XDG_STATE_HOME=$HOME/state XDG_CACHE_HOME=$HOME/cache BIN_DIR=$HOME/bin
-cat > "$concern/Makefile" <<'MAKEFILE'
+cat > "$module/Makefile" <<'MAKEFILE'
 required_inputs := REQUIRED
 REQUIRED ?= ready
 links := config/example
-include ${PROTOCOL_MK}
+include ${HOMESTEAD_MK}
 MAKEFILE
-printf 'version one\n' > "$concern/src/config/example"
-printf 'obsolete\n' > "$concern/src/config/obsolete"
-printf 'vendor\n' > "$concern/vendor/data/payload"
-printf '#!/bin/sh\nexit 0\n' > "$concern/src/bin/tool"
-chmod +x "$concern/src/bin/tool"
-run() { make --no-print-directory -C "$concern" "$@"; }
-receipt=$concern/.homestead/receipt
+printf 'version one\n' > "$module/src/config/example"
+printf 'obsolete\n' > "$module/src/config/obsolete"
+printf 'vendor\n' > "$module/vendor/data/payload"
+printf '#!/bin/sh\nexit 0\n' > "$module/src/bin/tool"
+chmod +x "$module/src/bin/tool"
+run() { make --no-print-directory -C "$module" "$@"; }
+receipt=$module/.homestead/receipt
 tab=$(printf '\t')
 
 # Preview and dry-run installs do not create receipt state.
@@ -51,15 +51,15 @@ run install DRY_RUN=1 > "$work/dry-again"
 cmp "$receipt" "$work/before-preview"
 
 # The latest MD5 wins; matching an older installed version does not suffice.
-printf 'version two\n' > "$concern/src/config/example"
+printf 'version two\n' > "$module/src/config/example"
 run clean
 run install > "$work/new-version"
 printf 'version one\n' > "$XDG_CONFIG_HOME/example"
 # Source deletion and stage cleaning must not erase ownership history.
-rm "$concern/src/config/obsolete"
+rm "$module/src/config/obsolete"
 run clean
 run stage > "$work/prune"
-test ! -e "$concern/stage/config/obsolete"
+test ! -e "$module/stage/config/obsolete"
 run clean
 # Modified content and replacement symlinks survive; mode-only changes do not.
 printf 'modified vendor\n' > "$XDG_DATA_HOME/payload"
@@ -71,7 +71,7 @@ test -f "$BIN_DIR/tool"
 test -L "$HOME/.example"
 cmp "$receipt" "$work/before-uninstall"
 run uninstall REQUIRED= M4= RSYNC= > "$work/uninstall"
-test ! -e "$concern/stage"
+test ! -e "$module/stage"
 test -f "$XDG_CONFIG_HOME/example"
 test -f "$XDG_DATA_HOME/payload"
 test ! -e "$XDG_CONFIG_HOME/obsolete"
@@ -83,7 +83,7 @@ cmp "$receipt" "$work/before-uninstall"
 
 # Restoring the latest installed bytes permits removal without any sources.
 printf 'version two\n' > "$XDG_CONFIG_HOME/example"
-rm -rf "$concern/src" "$concern/vendor"
+rm -rf "$module/src" "$module/vendor"
 run uninstall REQUIRED= > "$work/no-sources"
 test ! -e "$XDG_CONFIG_HOME/example"
 test -f "$XDG_DATA_HOME/payload"
@@ -108,8 +108,8 @@ test -L "$XDG_CONFIG_HOME/example"
 rm "$XDG_CONFIG_HOME/example"
 
 # DESTDIR keeps receipt history and uninstall separate from the live install.
-mkdir -p "$concern/src/config"
-printf 'live\n' > "$concern/src/config/example"
+mkdir -p "$module/src/config"
+printf 'live\n' > "$module/src/config/example"
 run install > "$work/live"
 cp "$receipt" "$work/live-receipt"
 staged=$work/destdir
@@ -122,8 +122,8 @@ test -f "$XDG_CONFIG_HOME/example"
 test -L "$HOME/.example"
 
 # Namespace-root changes retain old destinations in the same receipt.
-run install config_root="$HOME/other-config" links= > "$work/relocated"
-run uninstall config_root="$HOME/other-config" links= > "$work/relocated-uninstall"
+run install XDG_CONFIG_HOME="$HOME/other-config" links= > "$work/relocated"
+run uninstall XDG_CONFIG_HOME="$HOME/other-config" links= > "$work/relocated-uninstall"
 test ! -e "$HOME/other-config/example"
 test ! -e "$XDG_CONFIG_HOME/example"
 
@@ -145,9 +145,9 @@ if run uninstall MD5SUM= > "$work/missing-md5" 2>&1; then exit 1; fi
 grep -q 'Missing tools needed to uninstall: MD5SUM' "$work/missing-md5"
 test -f "$XDG_CONFIG_HOME/example"
 # Earlier successful namespaces remain recorded if a later namespace fails.
-mkdir -p "$concern/vendor/data"
-printf 'new config\n' > "$concern/src/config/example"
-printf 'failed vendor\n' > "$concern/vendor/data/failed"
+mkdir -p "$module/vendor/data"
+printf 'new config\n' > "$module/src/config/example"
+printf 'failed vendor\n' > "$module/vendor/data/failed"
 run clean
 cat > "$work/fail-data-rsync" <<'SCRIPT'
 #!/bin/sh
@@ -174,12 +174,12 @@ run uninstall > "$work/repointed"
 test -L "$HOME/.example"
 test "$(readlink "$HOME/.example")" = "$HOME/somewhere-else"
 
-# An empty concern still has a usable receipt; an explicit location is honored.
+# An empty module still has a usable receipt.
 mkdir "$work/empty"
-printf 'include ${PROTOCOL_MK}\n' > "$work/empty/Makefile"
-make --no-print-directory -C "$work/empty" install RECEIPT=history.tsv
-test -f "$work/empty/history.tsv"
-test ! -s "$work/empty/history.tsv"
-make --no-print-directory -C "$work/empty" uninstall RECEIPT=history.tsv
+printf 'include ${HOMESTEAD_MK}\n' > "$work/empty/Makefile"
+make --no-print-directory -C "$work/empty" install
+test -f "$work/empty/.homestead/receipt"
+test ! -s "$work/empty/.homestead/receipt"
+make --no-print-directory -C "$work/empty" uninstall
 
 printf 'receipt installation and removal: PASS\n'

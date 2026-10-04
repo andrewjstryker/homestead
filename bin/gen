@@ -73,8 +73,6 @@ for argument do
 done
 shift "$original_count"
 
-mkdir -p "$(dirname "$output")"
-
 tmp="${output}.tmp.$$"
 trap 'rm -f "$tmp"' EXIT INT TERM
 
