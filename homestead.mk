@@ -270,7 +270,7 @@ rsync_flags := \
 define transfer_stage
 $(foreach n,${stage_namespaces},\
     RSYNC='${RSYNC}' DRY_RUN='$1' ${homestead_bin}/transfer \
-      '${receipt_file}' '$(abspath $(call root_of,$n))' '${receipt_destdir}' \
+      '${receipt_file}' '$(call root_of,$n)' '${receipt_destdir}' \
       '${stage}/$n/' ${rsync_flags} $1 --exclude='.*';${nl})
 endef
 
@@ -279,7 +279,7 @@ endef
 define transfer_vendor
 $(foreach n,${vendor_namespaces},\
     RSYNC='${RSYNC}' DRY_RUN='$1' ${homestead_bin}/transfer \
-      '${receipt_file}' '$(abspath $(call root_of,$n))' '${receipt_destdir}' \
+      '${receipt_file}' '$(call root_of,$n)' '${receipt_destdir}' \
       '${vendor}/$n/' ${rsync_flags} --copy-links $1 --exclude='.*';${nl})
 endef
 
