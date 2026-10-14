@@ -145,3 +145,24 @@ location, move that history to `.homestead/receipt` before further installation
 or removal. Use XDG root variables and `BIN_DIR` instead of secondary
 `config_root`/`data_root`/`state_root`/`cache_root`/`bin_root` overrides. Rename
 module-owned `M4FLAGS` to `m4_flags`.
+
+## Complete staging and greedy composition
+
+Stage now contains the complete installation tree, including literal copies of
+mapped vendor files. Vendor symlinks become regular staged files. Installation
+and previews transfer only stage; `inspect` and `fragment-files` now report
+stage paths for vendor payloads too. Restage existing modules to materialize
+vendor files; installation receipts remain valid and need no migration.
+
+The driver now distinguishes rebuild selection from available contributions.
+Selecting a consumer automatically stages available `MODULES_FIRST` modules,
+then collects fragments from all existing non-consumer stages. Unselected middle
+modules are not rebuilt or installed. Their staged contributions remain until
+restaged or cleaned. This replaces selection-only composition: omitting a middle
+module from the command no longer removes its environment from a consumer.
+
+Modules must provide the new read-only `staged-fragment-files` target through
+this version of `homestead.mk`. It reads actual staged fragments independently
+of current source/vendor declarations. Collections with independently pinned
+Homestead dependencies must update those module dependencies with the driver.
+Direct module builds retain explicit `ENV_FRAGMENTS` and standalone behavior.

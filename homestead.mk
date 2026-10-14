@@ -4,7 +4,7 @@
 # has the same relative path below stage, except that a final .m4 suffix is
 # removed. Modules claim inputs and publish outputs for other transformations.
 # vendor is the third-party declaration: mapped namespace directories below it
-# are installed directly and are never copied into stage. Dot-prefixed paths in
+# are copied into stage alongside first-party outputs. Dot-prefixed paths in
 # either tree, and unmapped vendor directories such as vendor/build, are private.
 
 homestead_mk := $(lastword ${MAKEFILE_LIST})
@@ -153,11 +153,21 @@ source_dirs      := $(patsubst %/,%,$(call rdirectories,${src}/))
 m4_sources       := $(filter %.m4,${sources})
 plain_sources    := $(filter-out ${m4_sources},${sources})
 
+# Vendor inputs are copied literally, including .m4 files. Only mapped
+# namespaces participate; private paths and editor backups remain excluded.
+namespaces := config data state cache bin
+vendor_roots := $(patsubst %/,%,$(wildcard $(addsuffix /,$(addprefix ${vendor}/,${namespaces}))))
+vendor_sources := $(foreach d,${vendor_roots},$(filter-out ${source_excludes},$(call rwildcard,$d/,*)))
+vendor_dirs := $(sort ${vendor_roots} $(foreach d,${vendor_roots},$(patsubst %/,%,$(call rdirectories,$d/))))
+vendor_files := $(patsubst ${vendor}/%,%,${vendor_sources})
+
 staged_files := \
   $(patsubst ${src}/%,${stage}/%,${plain_sources}) \
   $(patsubst ${src}/%.m4,${stage}/%,${m4_sources}) \
-  ${claimed_outputs}
-staged_dirs := $(patsubst ${src}/%,${stage}/%,${source_dirs})
+  ${claimed_outputs} \
+  $(patsubst ${vendor}/%,${stage}/%,${vendor_sources})
+staged_dirs := $(sort $(patsubst ${src}/%,${stage}/%,${source_dirs}) \
+  $(patsubst ${vendor}/%,${stage}/%,${vendor_dirs}))
 
 stage_files := $(patsubst ${stage}/%,%,${staged_files})
 
@@ -196,22 +206,21 @@ ${stage}/%: ${src}/%.m4 ${m4_context}
 ${stage}/%: ${src}/%
 	cp -p '$<' '$@'
 
+# Vendor transfers have always compared content rather than timestamps. Keep
+# that guarantee when staging, including symlinks retargeted to older files.
+.PHONY: update-vendor
+update-vendor:
+
+${stage}/%: ${vendor}/% update-vendor
+	${homestead_bin}/stage-vendor '$<' '$@'
+
 stage: prune ${staged_dirs} ${staged_files}
 	${homestead_bin}/validate-stage '${stage}' ${staged_dirs} -- ${staged_files}
 
 # Namespace mapping -----------------------------------------------------------
 
-namespaces := config data state cache bin
-
-# Snapshot vendor discovery once, retaining empty namespace directories for transfer.
-vendor_dirs := $(patsubst %/,%,$(wildcard $(addsuffix /,$(addprefix ${vendor}/,${namespaces}))))
-vendor_sources := $(if ${vendor_dirs},$(filter-out ${source_excludes},$(shell \
-  find $(foreach d,${vendor_dirs},'$d') -name '.*' -prune -o \
-    \( -type f -o -type l \) -print)))
-vendor_files := $(patsubst ${vendor}/%,%,${vendor_sources})
-files := ${stage_files} ${vendor_files}
+files := ${stage_files}
 stage_namespaces := $(foreach n,${namespaces},$(if $(filter $n $n/%,${stage_files} $(patsubst ${stage}/%,%,${staged_dirs})),$n))
-vendor_namespaces := $(patsubst ${vendor}/%,%,${vendor_dirs})
 
 config_root_variable := XDG_CONFIG_HOME
 data_root_variable := XDG_DATA_HOME
@@ -226,7 +235,7 @@ installed_of = $(call root_of,$1)/$(call relative_of,$1)
 
 claimed_files := $(patsubst ${stage}/%,%,${claimed_outputs})
 source_of   = $(firstword $(wildcard ${src}/$1 ${src}/$1.m4))
-manifest_of = $(if $(filter $1,${vendor_files}),${vendor}/$1,${stage}/$1)
+manifest_of = ${stage}/$1
 declared_by = $(if $(filter $1,${vendor_files}),${vendor}/$1,$(if $(filter $1,${claimed_files}),${stage}/$1,$(call source_of,$1)))
 mode_of     = $(if $(shell test -x '$(call declared_by,$1)' && echo x),0700,0600)
 
@@ -274,16 +283,7 @@ $(foreach n,${stage_namespaces},\
       '${stage}/$n/' ${rsync_flags} $1 --exclude='.*';${nl})
 endef
 
-# Vendored symlinks are dereferenced so the installed manifest remains a set of
-# ordinary files with independently comparable content.
-define transfer_vendor
-$(foreach n,${vendor_namespaces},\
-    RSYNC='${RSYNC}' DRY_RUN='$1' ${homestead_bin}/transfer \
-      '${receipt_file}' '$(call root_of,$n)' '${receipt_destdir}' \
-      '${vendor}/$n/' ${rsync_flags} --copy-links $1 --exclude='.*';${nl})
-endef
-
-transfer = $(call transfer_stage,$1) $(call transfer_vendor,$1)
+transfer = $(call transfer_stage,$1)
 
 preview: stage check-install-tools
 	$(call transfer,--dry-run)
@@ -360,6 +360,15 @@ inspect:
 .PHONY: fragment-files
 fragment-files:
 	$(foreach f,$(filter config/env.d/%.sh,${files}),printf '%s\n' '$(call manifest_of,$f)';${nl})
+
+# Read the assembled environment, independent of current source declarations.
+# This target never stages: unselected modules keep their existing snapshot.
+.PHONY: staged-fragment-files
+staged-fragment-files:
+	if [ -d '${stage}/config/env.d' ]; then \
+	  fragments=$$(find '${stage}/config/env.d' -name '.*' -prune -o -type f -name '*.sh' -print) || exit; \
+	  printf '%s\n' "$$fragments" | LC_ALL=C sort; \
+	fi
 
 .PHONY: check-prerequisites
 check-prerequisites:

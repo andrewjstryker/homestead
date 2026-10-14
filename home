@@ -9,7 +9,7 @@
 #
 #   show       [module...]    print resolved paths and modules
 #   check      [module...]    run full preflight without staging or installing
-#   stage      [module...]    realize each module's generated manifest files
+#   stage      [module...]    realize each module's complete installation tree
 #   preview    [module...]    report files install would create or overwrite
 #   install    [module...]    install each module's declared payload
 #   sync       [module...]    synchronize runtime and network state
@@ -157,7 +157,7 @@ module_repos() {
 
 # Configured first modules, the stable middle, then configured last modules.
 # The ordering delivers runtime floor fragments before domain contributions.
-# It does not create a build or installation dependency between modules.
+# Consumers also stage available first modules, without implicitly installing them.
 order_repos() {
 	all=$(cat)
 
@@ -249,6 +249,7 @@ failure_is_fatal() {
 
 # Called from guarded Make invocations; do not rely on errexit inside functions.
 record_failure() {
+	excluded_repos="${excluded_repos-}${excluded_repos:+${newline}}$2"
 	if [ "$failure_policy" = stop ]; then
 		printf '\nFAILED (%s): %s\n' "$1" "$2" >&2
 		return 1
@@ -275,20 +276,51 @@ report_failures() {
 	return 0
 }
 
-# If a last module is selected, stage everything before the last group, then
-# collect the environment declarations those completed manifests contain.
-#
-# A module writes its declarations to config/env.d/*.sh in either manifest
-# root — mail's MAILDIR, security's GNUPGHOME — and whichever module builds
-# the shell inlines them. Collecting happens HERE because this script is the
-# only thing that
-# knows the roster: a module asking its siblings directly would be reaching
-# across module boundaries, which Independence forbids.  Passed in as a
-# variable, they are an input like DESTDIR or EMAIL.
-#
-# Staging is incremental and inexpensive, so there is no partial `fragments`
-# target and no source-tree inspection to identify producers. A module with no
-# config/env.d files simply contributes nothing when the manifests are scanned.
+# A consumer refreshes the available foundations even on a targeted build.
+# Keep repos (the user selection) separate from operation_repos (build work).
+expand_stage_selection() {
+	for repo in $operation_repos; do
+		listed "$repo" "$modules_last" || continue
+		for candidate in $(module_repos); do
+			listed "$candidate" "$modules_first" || continue
+			listed "$candidate" "$operation_repos" && continue
+			operation_repos="${operation_repos}${newline}${candidate}"
+		done
+		operation_repos=$(printf '%s\n' "$operation_repos" | order_repos)
+		break
+	done
+}
+
+# Only requested modules need installation tools. Implicit foundations are
+# build inputs, so retain them for staging without preflighting installation.
+preflight_selected_install() {
+	implicit_repos=
+	selected_ready=
+	for repo in $operation_repos; do
+		if listed "$repo" "$repos"; then
+			selected_ready="${selected_ready}${selected_ready:+${newline}}${repo}"
+		else
+			implicit_repos="${implicit_repos}${implicit_repos:+${newline}}${repo}"
+		fi
+	done
+	operation_repos=$selected_ready
+	install_preflight_status=0
+	preflight_tools install || install_preflight_status=$?
+	operation_repos=$(printf '%s\n%s\n' "$implicit_repos" "$operation_repos" | sed '/^$/d' | order_repos)
+	return "$install_preflight_status"
+}
+
+retain_selected() {
+	selected_ready=
+	for repo in $operation_repos; do
+		listed "$repo" "$repos" || continue
+		selected_ready="${selected_ready}${selected_ready:+${newline}}${repo}"
+	done
+	operation_repos=$selected_ready
+}
+
+# Refresh selected producers and implicit foundations before consumers. Middle
+# modules not selected are never rebuilt; their existing stage is their input.
 stage_before_last() {
 	staged_repos=
 	has_last=no
@@ -326,8 +358,9 @@ stage_before_last() {
 	report_failures stage "$warned" "$failed"
 }
 
-# Collect paths in the parent shell so collect-mode failures and surviving
-# producers remain visible to the caller. Never evaluate fragment contents.
+# Stage is the composition state. Inspect staged fragments from every available
+# producer, not its current source/vendor manifest. Exclude any producer that
+# failed this operation so stale or partial outputs cannot mask that failure.
 collect_fragments() {
 	fragments=
 	has_last=no
@@ -338,22 +371,17 @@ collect_fragments() {
 
 	warned=
 	failed=
-	ready=
-	for repo in $operation_repos; do
-		if listed "$repo" "$modules_last"; then
-			ready="${ready}${ready:+${newline}}${repo}"
-			continue
-		fi
-		if inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect); then
-			ready="${ready}${ready:+${newline}}${repo}"
+	for repo in $(module_repos); do
+		listed "$repo" "$modules_last" && continue
+		listed "$repo" "${excluded_repos-}" && continue
+		if fragment_output=$("${MAKE}" --no-print-directory -C "$repo" staged-fragment-files); then
+			:
 		else
-			printf 'home: could not inspect manifest for %s\n' "$repo" >&2
+			printf 'home: could not inspect staged fragments for %s\n' "$repo" >&2
 			[ "$failure_policy" != selection ] || return 1
 			record_failure inspect "$repo" || return 1
 			continue
 		fi
-		fragment_output=$(printf '%s\n' "$inspection" |
-			awk -F '\t' '$1 == "file" && $4 ~ /^config\/env.d\/.*\.sh$/ { print $3 }') || return 1
 		while IFS= read -r source; do
 			[ -n "$source" ] || continue
 			case $source in
@@ -364,6 +392,11 @@ collect_fragments() {
 		done <<EOF
 $fragment_output
 EOF
+	done
+	ready=
+	for repo in $operation_repos; do
+		listed "$repo" "${excluded_repos-}" && continue
+		ready="${ready}${ready:+${newline}}${repo}"
 	done
 	operation_repos=$ready
 	report_failures inspect "$warned" "$failed"
@@ -534,22 +567,27 @@ cmd_show() {
 }
 
 cmd_install() {
+	expand_stage_selection
 	preflight_tools stage || return 1
-	preflight_tools install || return 1
+	preflight_selected_install || return 1
 	stage_before_last || return 1
 	collect_fragments || return 1
+	retain_selected
 	recurse install || return 1
 }
 
 cmd_preview() {
+	expand_stage_selection
 	preflight_tools stage
-	preflight_tools install
+	preflight_selected_install
 	stage_before_last
 	collect_fragments
+	retain_selected
 	recurse preview
 }
 
 cmd_stage() {
+	expand_stage_selection
 	stage_status=0
 	preflight_tools stage || stage_status=1
 	stage_before_last || stage_status=1
@@ -576,10 +614,12 @@ cmd_sync() {
 }
 
 cmd_apply() {
+	expand_stage_selection
 	preflight_tools stage || return 1
-	preflight_tools install || return 1
+	preflight_selected_install || return 1
 	stage_before_last || return 1
 	collect_fragments || return 1
+	retain_selected
 	recurse install || return 1
 
 	# DESTDIR proves filesystem installation in isolation. Synchronization acts
@@ -725,5 +765,6 @@ esac
 repos=
 [ "$command" = help ] || repos=$(resolve_repos)
 operation_repos=$repos
+excluded_repos=
 
 "cmd_${command}"

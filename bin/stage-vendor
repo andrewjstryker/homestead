@@ -1,0 +1,19 @@
+#!/bin/sh
+# Materialize a vendor file only when its bytes or executable status change.
+set -eu
+source=${1:?usage: stage-vendor <source> <destination>}
+destination=${2:?usage: stage-vendor <source> <destination>}
+
+if [ -f "$destination" ] && [ ! -L "$destination" ] && cmp -s "$source" "$destination"; then
+	if [ -x "$source" ]; then
+		[ ! -x "$destination" ] || exit 0
+	else
+		[ -x "$destination" ] || exit 0
+	fi
+fi
+
+# Never copy through a staged symlink. Vendor links belong only in the inputs.
+if [ -L "$destination" ]; then
+	rm -f "$destination"
+fi
+cp -pL "$source" "$destination"

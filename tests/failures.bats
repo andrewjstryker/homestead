@@ -30,7 +30,7 @@ sync: observe-sync
 observe-inspect:
 	printf 'inspect %s\n' '${module}' >> "$${EVENTS}"
 	$(if $(filter ${module},${FAIL_INSPECT}),false,:)
-inspect: observe-inspect
+inspect staged-fragment-files: observe-inspect
 MAKEFILE
     done
 

@@ -31,9 +31,12 @@ Add `stage/` and `.homestead/` to `.gitignore`. Stage is generated build state;
 Homestead can later remove files it installed.
 
 Pinned third-party files that are already ready to install go under matching
-`vendor/` namespaces. For example, `vendor/config/example/plugin.lua` installs
-alongside your settings without being copied into stage. A source directory
-with a hidden `.keep` declares an empty installed directory.
+`vendor/` namespaces. Staging copies them literally into the same installation
+tree as generated files; installation transfers only that staged tree. For
+example, `vendor/config/example/plugin.lua` stages to
+`stage/config/example/plugin.lua` and installs alongside your settings. A source
+or mapped vendor directory with a hidden `.keep` declares an empty installed
+directory.
 
 ## 2. Check and install
 
@@ -172,10 +175,26 @@ exec "$root/_homestead/home" --root "$root" "$@"
 ```
 
 Make the wrapper executable. During composing actions, consumers receive ordered
-fragment paths in `ENV_FRAGMENTS`. The consumer owns assembly, rebuild tracking,
+staged fragment paths in `ENV_FRAGMENTS`. Selecting a consumer also refreshes
+available first modules. Existing staged middle modules contribute without
+being rebuilt unless selected. The consumer owns assembly, rebuild tracking,
 and runtime evaluation; the driver does not source the fragments. Shared values
 belong to first modules, domain additions to middle modules, and assembly to
 last modules. See the [composition contract](CONTRACT.md#collection-composition).
+
+For a wrapper with `base` first and `zsh` last:
+
+```sh
+./home stage               # assemble all modules and their contributions
+./home stage zsh           # refresh base and zsh; retain staged middle modules
+./home clean mail          # remove mail from the assembled state
+./home stage zsh           # rebuild the shell without mail's contribution
+```
+
+From a clean tree, `./home stage zsh` stages base and zsh only. Edits to a middle
+module take effect after staging that module. `./home install zsh` uses the same
+composition rules and installs only zsh, not its implicit base dependency.
+Cleaning stage does not uninstall previously installed files.
 
 Use `./home apply` when the collection should install everything and then run
 module-defined synchronization. Use `./home test` for optional module tests.

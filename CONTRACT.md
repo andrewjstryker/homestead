@@ -18,9 +18,11 @@ from these rules; claimed outputs join the public staged manifest. Both lists
 contain paths including their respective roots. Outputs must be known without
 building and need not correspond one-to-one with inputs.
 
-Mapped vendor files install directly. The manifest is the union of ordinary
-outputs, claimed outputs, and vendored files; modules must not maintain another
-installation manifest. Public paths begin with one of these namespaces:
+Mapped vendor files are copied literally into stage, including files ending in
+`.m4`. Vendor symlinks are dereferenced into regular staged files. Stage is the
+complete installation tree: ordinary outputs, claimed outputs, and vendor
+payload share one manifest; modules must not maintain another installation
+manifest. Public paths begin with one of these namespaces:
 
 | Namespace | Root variable | Default location |
 | --- | --- | --- |
@@ -31,8 +33,8 @@ installation manifest. Public paths begin with one of these namespaces:
 | `bin` | `BIN_DIR` | `$HOME/.local/bin` |
 
 Explicitly empty roots are invalid. `XDG_RUNTIME_DIR` is not an installation
-root. Source directories declare directories, including empty ones. Hidden
-source/vendor paths and files ending in `~`, `.orig`, or `.rej` are excluded from
+root. Source and mapped vendor directories declare directories, including empty
+ones. Hidden source/vendor paths and files ending in `~`, `.orig`, or `.rej` are excluded from
 ordinary discovery. Dot-prefixed staged paths are private build space.
 Declaration paths cannot contain whitespace or Make pattern/syntax characters.
 Files in `src/bin` must be executable; installed files receive `0600` or `0700`.
@@ -91,8 +93,8 @@ maps each to its location, defaulting to `${HOME}/.<basename>`.
 
 ## Installation and removal
 
-Installation compares content and preserves destinations outside the manifest.
-Vendored symlinks install as regular files. Successful namespace transfers append
+Installation transfers only the staged tree, compares content, and preserves
+destinations outside the manifest. Successful namespace transfers append
 ownership records, including unchanged files, to the fixed `.homestead/receipt` location.
 Uninstall uses the latest MD5 per destination without staging: matching regular
 files are removed, while modified files and replacement symlinks are preserved.
@@ -125,7 +127,12 @@ link<TAB>-<TAB>-<TAB>manifest-path<TAB>destination<TAB>target
 Destinations exclude `DESTDIR`; sources may not exist before staging. Modes are
 `0600` or `0700`; an unbuilt claimed output reports `0600`. Fields cannot contain
 tabs or newlines. `fragment-files` remains a compatibility projection of effective
-environment-fragment source paths, one per line.
+declared environment-fragment paths, one per line.
+
+`staged-fragment-files` reports existing public `config/env.d/**/*.sh` files
+under the configured stage root in byte-sorted order, one path per line. It is
+read-only and does not consult current source/vendor declarations or stage the
+module. An absent staged environment directory contributes nothing.
 
 The driver discovers immediate child directories containing a Makefile, excluding
 names beginning with `_` or `.`. Modules must build independently without
@@ -140,19 +147,32 @@ domain configuration; `MODULES_LAST` names consumers. Both lists default to
 empty and contain newline-separated names. First/last follow configured order;
 middle modules have no ordering dependency on one another.
 
-During `stage`, `preview`, `install`, and `apply`, the driver stages selected
-preceding modules and passes absolute `config/env.d/*.sh` paths from stage or
-vendor as newline-separated `ENV_FRAGMENTS`. First contributions precede middle
-contributions. Consumers own assembly, dependency tracking, and ordered runtime
-evaluation. Multiple consumers receive the same preceding set. Selection does
-not add missing providers; consumers own standalone behavior. Other actions do
-not compose. The driver does not evaluate fragments.
+During `stage`, `preview`, `install`, and `apply`, selecting a last module also
+stages every available first module. Selected middle modules are staged too;
+unselected middle modules are not rebuilt. The driver then collects existing
+staged environment fragments from every available non-last module, using
+`staged-fragment-files`, and passes absolute paths as newline-separated
+`ENV_FRAGMENTS`. First contributions precede middle contributions in collection
+order. Multiple consumers receive the same set. Vendor and internal fragments
+participate identically once staged. The driver never evaluates their contents.
+
+Stage is the composition state. A targeted consumer rebuild retains unselected
+modules' staged contributions, even if their sources have since changed or been
+removed. Restage a producer to refresh its snapshot; clean its stage to opt out.
+From a clean collection, staging only a consumer includes the available first
+modules and no middle modules. Direct module Make builds still accept explicit
+`ENV_FRAGMENTS`, defaulting to empty for standalone use.
+
+Only selected modules are installed, previewed, or synchronized. Implicit first
+modules require staging tools and inputs, but not installation tools. Other
+commands do not expand the selection or compose environment fragments.
+Consumers own assembly, dependency tracking, and ordered runtime evaluation.
 
 ## Collection failures
 
 `check` and `stage` collect errors and fail for any selected module's failure.
-Stage excludes failed producers from composition and stages successful producers
-once; surviving contributions do not imply a complete runtime environment.
+Stage excludes producers that failed during the current operation from
+composition and stages successful producers once; surviving contributions do not imply a complete runtime environment.
 `install` and `apply` preflight staging and installation across the selection
 before building, and stop on the first failure. Apply syncs only after all
 installations succeed and synchronization preflight passes.

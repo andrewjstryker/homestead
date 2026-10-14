@@ -129,7 +129,7 @@ setup() {
 #!/bin/sh
 "$REAL_RSYNC" "$@" || exit
 for arg do
-    case $arg in vendor/data/ | */vendor/data/) exit 23 ;; esac
+    case $arg in stage/data/ | */stage/data/) exit 23 ;; esac
 done
 SCRIPT
     chmod +x "$work/fail-rsync"
