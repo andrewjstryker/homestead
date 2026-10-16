@@ -24,7 +24,10 @@ include _homestead/homestead.mk
 Put your application's settings in `src/config/example/settings`. Homestead
 copies it to `stage/config/example/settings` and installs it beneath
 `XDG_CONFIG_HOME`. See [destination defaults](CONTRACT.md#declarations) for all
-namespaces. Executable scripts go under `src/bin/`; mark them executable in Git.
+namespaces. User-facing commands go under `src/bin/`; private executable helpers
+go under `src/libexec/<application>/`. Mark both executable in Git. `LIBEXEC_DIR`
+defaults to `~/.local/libexec`; callers in templates use `M4_LIBEXEC_DIR` so
+installation paths are rendered at build time.
 
 Add `stage/` and `.homestead/` to `.gitignore`. Stage is generated build state;
 `.homestead/` holds local installation receipts. Keep those receipts on disk so

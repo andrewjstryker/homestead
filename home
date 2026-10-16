@@ -31,7 +31,7 @@
 #   --destdir DIR           staged-root prefix for every written path
 #
 # environment:
-#   DESTDIR XDG_CONFIG_HOME XDG_RUNTIME_DIR BIN_DIR HOME MAKE
+#   DESTDIR XDG_CONFIG_HOME XDG_RUNTIME_DIR BIN_DIR LIBEXEC_DIR HOME MAKE
 #   HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST (newline-separated lists)
 #
 set -eu
@@ -111,12 +111,14 @@ read_env_file "${CONFIG_ENV}"
 : "${XDG_CACHE_HOME:?XDG_CACHE_HOME must not be empty}"
 : "${BIN_DIR=${HOME}/.local/bin}"
 : "${BIN_DIR:?BIN_DIR must not be empty}"
+: "${LIBEXEC_DIR=${HOME}/.local/libexec}"
+: "${LIBEXEC_DIR:?LIBEXEC_DIR must not be empty}"
 : "${DESTDIR:=}"
 : "${MAKE:=make}"
 : "${MODULES_FIRST=}"
 : "${MODULES_LAST=}"
 
-export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR
+export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR
 
 #------------------------------------------------------------------------------#
 # Modules
@@ -544,6 +546,7 @@ cmd_show() {
 	printf '  XDG_CACHE_HOME..... %s\n' "${XDG_CACHE_HOME}"
 	printf '  XDG_RUNTIME_DIR.... %s\n' "${XDG_RUNTIME_DIR:-(unset — supplied by the session manager)}"
 	printf '  BIN_DIR............ %s\n' "${BIN_DIR}"
+	printf '  LIBEXEC_DIR........ %s\n' "${LIBEXEC_DIR}"
 	printf '  DESTDIR............ %s\n' "${DESTDIR}"
 	printf '  MAKE............... %s\n' "${MAKE}"
 	printf '  CONFIG_ENV......... %s\n' \

@@ -5,7 +5,7 @@ setup_sandbox() {
     repo_root=$(cd "$BATS_TEST_DIRNAME/.." && pwd)
     work=$BATS_TEST_TMPDIR
     export HOME=$work/home XDG_CONFIG_HOME=$work/config XDG_DATA_HOME=$work/data
-    export XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache BIN_DIR=$work/bin
+    export XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache BIN_DIR=$work/bin LIBEXEC_DIR=$work/libexec
     export HOMESTEAD_MK=$repo_root/homestead.mk
     export CONFIG_ENV=$work/absent.env
     unset DESTDIR DRY_RUN ENV_FRAGMENTS

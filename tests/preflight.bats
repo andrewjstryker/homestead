@@ -80,7 +80,7 @@ MAKEFILE
 @test "explicitly empty installation roots are rejected by Make and the driver" {
     fixture_module
     export HOMESTEAD_ROOT=$work MODULES_FIRST='' MODULES_LAST=''
-    for variable in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR; do
+    for variable in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR; do
         run make_module show "$variable="
         assert_failure
         assert_output_contains "$variable must not be empty"

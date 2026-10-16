@@ -31,13 +31,14 @@ manifest. Public paths begin with one of these namespaces:
 | `state` | `XDG_STATE_HOME` | `$HOME/.local/state` |
 | `cache` | `XDG_CACHE_HOME` | `$HOME/.cache` |
 | `bin` | `BIN_DIR` | `$HOME/.local/bin` |
+| `libexec` | `LIBEXEC_DIR` | `$HOME/.local/libexec` |
 
 Explicitly empty roots are invalid. `XDG_RUNTIME_DIR` is not an installation
 root. Source and mapped vendor directories declare directories, including empty
 ones. Hidden source/vendor paths and files ending in `~`, `.orig`, or `.rej` are excluded from
 ordinary discovery. Dot-prefixed staged paths are private build space.
 Declaration paths cannot contain whitespace or Make pattern/syntax characters.
-Files in `src/bin` must be executable; installed files receive `0600` or `0700`.
+Files in `src/bin` and `src/libexec` must be executable; installed files receive `0600` or `0700`.
 
 ## Inputs
 
@@ -48,7 +49,7 @@ to recipes. Tool lists `stage_tools`, `install_tools`, `sync_tools`, and
 ordinary templates, `RSYNC` for installation, and `MD5SUM` for removal. Tool
 gates require nonempty values; executable capabilities are module-owned checks.
 
-Ordinary m4 outputs receive persistent XDG roots, `BIN_DIR`, required inputs,
+Ordinary m4 outputs receive persistent XDG roots, `BIN_DIR`, `LIBEXEC_DIR`, required inputs,
 and names in `m4_vars` as `M4_NAME`. Changes to these values or renderer settings (`M4` and module-owned `m4_flags`)
 invalidate those outputs. Other file dependencies remain explicit. Render values
 cannot contain newline or NUL. `show_vars` adds named values to diagnostics.

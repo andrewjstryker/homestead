@@ -43,10 +43,11 @@ XDG_DATA_HOME   ?= ${HOME}/.local/share
 XDG_STATE_HOME  ?= ${HOME}/.local/state
 XDG_CACHE_HOME  ?= ${HOME}/.cache
 BIN_DIR         ?= ${HOME}/.local/bin
+LIBEXEC_DIR     ?= ${HOME}/.local/libexec
 required_inputs ?=
 
 path_vars := \
-  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR
 
 require_nonempty = $(if $(strip $($1)),,$(error $1 must not be empty))
 $(foreach v,HOME ${path_vars},$(call require_nonempty,$v))
@@ -89,7 +90,7 @@ missing_inputs = $(strip \
 # M4_ prefix. Keeping build macros out of the runtime namespace lets a template
 # use ordinary shell/configuration names without capture-and-undefine tricks.
 m4_context_vars = \
-  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR \
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR \
   ${required_inputs}
 m4_render_vars = $(sort ${m4_context_vars} ${m4_vars})
 
@@ -155,7 +156,7 @@ plain_sources    := $(filter-out ${m4_sources},${sources})
 
 # Vendor inputs are copied literally, including .m4 files. Only mapped
 # namespaces participate; private paths and editor backups remain excluded.
-namespaces := config data state cache bin
+namespaces := config data state cache bin libexec
 vendor_roots := $(patsubst %/,%,$(wildcard $(addsuffix /,$(addprefix ${vendor}/,${namespaces}))))
 vendor_sources := $(foreach d,${vendor_roots},$(filter-out ${source_excludes},$(call rwildcard,$d/,*)))
 vendor_dirs := $(sort ${vendor_roots} $(foreach d,${vendor_roots},$(patsubst %/,%,$(call rdirectories,$d/))))
@@ -227,6 +228,7 @@ data_root_variable := XDG_DATA_HOME
 state_root_variable := XDG_STATE_HOME
 cache_root_variable := XDG_CACHE_HOME
 bin_root_variable := BIN_DIR
+libexec_root_variable := LIBEXEC_DIR
 
 namespace_of = $(firstword $(subst /, ,$1))
 relative_of  = $(patsubst $(call namespace_of,$1)/%,%,$1)
@@ -328,7 +330,7 @@ help:
 
 show:
 	printf 'Environment:\n'
-	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR,\
+	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR LIBEXEC_DIR,\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	printf '  %-20s %s\n' 'DESTDIR' '${DESTDIR}'
 	printf '  %-20s %s\n' 'receipt' '${receipt_file}'
