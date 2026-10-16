@@ -6,7 +6,7 @@ setup() {
     fixture_module
 }
 
-@test "staging maps ordinary, template, and claimed sources without staging vendor files" {
+@test "staging maps ordinary, template, and claimed sources and vendor sources into one installation tree" {
     run make_module -j4 stage
     assert_success
     [ "$(cat "$module/stage/config/static.conf")" = static ]
@@ -15,7 +15,7 @@ setup() {
     [ "$(cat "$module/stage/config/rendered.conf")" = rendered ]
     [ "$(cat "$module/stage/config/runtime-name.conf")" = 'XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-'"$XDG_CONFIG_HOME"'}"' ]
     [ -x "$module/stage/bin/rendered-tool" ]
-    [ ! -e "$module/stage/data/vendor-example" ]
+    [ -f "$module/stage/data/vendor-example" ]
     [ ! -e "$module/stage/build/ignored" ]
 }
 
@@ -89,4 +89,57 @@ SCRIPT
     run make_module inspect XDG_CONFIG_HOME="$work/custom"
     assert_success
     assert_output_contains "$(printf 'file\t0600\tstage/config/static.conf\tconfig/static.conf\t%s/static.conf' "$work/custom")"
+}
+
+@test "vendor payload is literal, dereferenced, pruned, and inspected through stage" {
+    mkdir -p "$module/vendor/config/empty"
+    printf 'M4_LITERAL\n' > "$module/vendor/config/literal.m4"
+    ln -s literal.m4 "$module/vendor/config/alias"
+    printf private > "$module/vendor/config/.private"
+    printf backup > "$module/vendor/config/ignored.orig"
+    make_module -j4 stage
+    [ "$(cat "$module/stage/config/literal.m4")" = M4_LITERAL ]
+    [ -f "$module/stage/config/alias" ]
+    [ ! -L "$module/stage/config/alias" ]
+    [ -d "$module/stage/config/empty" ]
+    [ ! -e "$module/stage/config/.private" ]
+    [ ! -e "$module/stage/config/ignored.orig" ]
+    run make_module inspect
+    assert_success
+    assert_output_contains $'file\t0600\tstage/config/literal.m4\tconfig/literal.m4'
+    rm "$module/vendor/config/alias" "$module/vendor/config/literal.m4"
+    rmdir "$module/vendor/config/empty"
+    make_module -j4 stage
+    [ ! -e "$module/stage/config/alias" ]
+    [ ! -e "$module/stage/config/literal.m4" ]
+    [ ! -e "$module/stage/config/empty" ]
+}
+
+@test "vendor updates rebuild staged files and retain executable permissions" {
+    mkdir -p "$module/vendor/bin"
+    printf first > "$module/vendor/bin/tool"
+    chmod u+x "$module/vendor/bin/tool"
+    make_module stage
+    [ -x "$module/stage/bin/tool" ]
+    printf second > "$module/vendor/bin/tool"
+    chmod a-x "$module/vendor/bin/tool"
+    touch -t 200001010000 "$module/vendor/bin/tool"
+    make_module stage
+    [ "$(cat "$module/stage/bin/tool")" = second ]
+    [ ! -x "$module/stage/bin/tool" ]
+}
+
+@test "vendor symlink retargeting to older content refreshes the staged snapshot" {
+    printf first > "$work/first"
+    printf second > "$work/second"
+    touch -t 200001010000 "$work/second"
+    ln -s "$work/first" "$module/vendor/data/linked"
+    make_module stage
+    ln -sf "$work/second" "$module/vendor/data/linked"
+    make_module stage
+    [ "$(cat "$module/stage/data/linked")" = second ]
+    [ ! -L "$module/stage/data/linked" ]
+    before=$(stat -c '%i:%Y:%Z' "$module/stage/data/linked")
+    make_module stage
+    [ "$(stat -c '%i:%Y:%Z' "$module/stage/data/linked")" = "$before" ]
 }

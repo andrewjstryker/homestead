@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove public stage entries which are no longer declared by src.
+# Remove public stage entries which are no longer declared by source or vendor inputs.
 set -eu
 
 stage=${1:?usage: prune <stage> [expected-path ...]}
@@ -7,13 +7,20 @@ shift
 
 [ -d "$stage" ] || exit 0
 
+# Delimited membership avoids a shell loop over the whole manifest per file.
+# Declaration paths cannot contain newlines.
+newline='
+'
+expected_paths=$newline
+for path do
+	expected_paths="${expected_paths}${path}${newline}"
+done
+
 expected() {
-	prune_candidate=$1
-	shift
-	for prune_expected do
-		[ "$prune_candidate" = "$prune_expected" ] && return 0
-	done
-	return 1
+	case $expected_paths in
+		*"${newline}$1${newline}"*) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 # Files first, then empty directories from the leaves upward. Any path with a
@@ -21,7 +28,7 @@ expected() {
 find "$stage" \( -type f -o -type l \) -print | while IFS= read -r path; do
 	relative=${path#"$stage"/}
 	case $relative in .* | */.*) continue ;; esac
-	if ! expected "$path" "$@"; then
+	if ! expected "$path"; then
 		rm -f "$path"
 		printf 'pruned %s\n' "$path"
 	fi
@@ -31,7 +38,7 @@ find "$stage" -depth -type d -print | while IFS= read -r path; do
 	[ "$path" = "$stage" ] && continue
 	relative=${path#"$stage"/}
 	case $relative in .* | */.*) continue ;; esac
-	if ! expected "$path" "$@" && rmdir "$path" 2>/dev/null; then
+	if ! expected "$path" && rmdir "$path" 2>/dev/null; then
 		printf 'pruned %s/\n' "$path"
 	fi
 done

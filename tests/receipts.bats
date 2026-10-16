@@ -129,7 +129,7 @@ setup() {
 #!/bin/sh
 "$REAL_RSYNC" "$@" || exit
 for arg do
-    case $arg in vendor/data/ | */vendor/data/) exit 23 ;; esac
+    case $arg in stage/data/ | */stage/data/) exit 23 ;; esac
 done
 SCRIPT
     chmod +x "$work/fail-rsync"
@@ -179,4 +179,18 @@ SCRIPT
     [ ! -e "$XDG_DATA_HOME/.private" ]
     [ "$(cat "$XDG_CONFIG_HOME/unrelated")" = unrelated ]
     [ "$(readlink "$HOME/.example")" = "$XDG_CONFIG_HOME/example" ]
+}
+
+@test "destination roots preserve spaces for staged and vendored files and receipts" {
+    export XDG_CONFIG_HOME="$work/unused/../custom config"
+    export XDG_DATA_HOME="$work/custom data"
+    export BIN_DIR="$work/custom bin"
+    make_module install
+    cmp "$module/src/config/example" "$work/custom config/example"
+    cmp "$module/vendor/data/payload" "$XDG_DATA_HOME/payload"
+    [ -x "$BIN_DIR/tool" ]
+    make_module uninstall
+    [ ! -e "$work/custom config/example" ]
+    [ ! -e "$XDG_DATA_HOME/payload" ]
+    [ ! -e "$BIN_DIR/tool" ]
 }

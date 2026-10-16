@@ -20,29 +20,22 @@ for path do
 }$path"
 done
 
-listed() {
-	needle=$1
-	list=$2
-	old_ifs=$IFS
-	IFS='
+# Public manifests can contain thousands of vendor files. Use delimited
+# membership rather than an interpreted shell loop for every staged entry.
+newline='
 '
-	for item in $list; do
-		[ "$item" = "$needle" ] && { IFS=$old_ifs; return 0; }
-	done
-	IFS=$old_ifs
-	return 1
+listed() {
+	case "${newline}$2${newline}" in
+		*"${newline}$1${newline}"*) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 file_descends_from() {
-	directory=$1
-	old_ifs=$IFS
-	IFS='
-'
-	for file in $declared_files; do
-		case $file in "$directory"/*) IFS=$old_ifs; return 0 ;; esac
-	done
-	IFS=$old_ifs
-	return 1
+	case "${newline}${declared_files}${newline}" in
+		*"${newline}$1/"*) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 contains_private() {
