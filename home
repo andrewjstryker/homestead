@@ -23,9 +23,11 @@
 # Name one or more to narrow it:
 #
 #   home install zsh nvim
+#   home install -- command [argument...]
 #   home uninstall --dry-run base
 #
 # options:
+#   -- COMMAND [ARG...]     run after successful live install (not with --destdir)
 #   --root DIR              collection directory (before verb; default: cwd)
 #   --dry-run               preview destination changes (staging may write locally)
 #   --destdir DIR           staged-root prefix for every written path
@@ -705,12 +707,19 @@ command=${1:-help}
 case $command in -h | --help) command=help ;; esac
 
 dry_run=no
+post_command=no
 selected=
 
 # Options and module names may be interleaved, so that both
 # "home install zsh --dry-run" and its option-first form both work.
 while [ $# -gt 0 ]; do
 	case $1 in
+        --)
+            shift
+            [ "$#" -gt 0 ] || { echo 'home: -- requires a command' >&2; exit 2; }
+            post_command=yes
+            break
+            ;;
 		--dry-run)
 			dry_run=yes
 			;;
@@ -758,6 +767,11 @@ case $command in
 		;;
 esac
 
+if [ "$post_command" = yes ]; then
+    [ "$command" = install ] || { echo 'home: a command after -- requires install' >&2; exit 2; }
+    [ -z "$DESTDIR" ] || { echo 'home: a command after -- cannot run with --destdir' >&2; exit 2; }
+fi
+
 # Continuation is a command policy, independent of module composition roles.
 failure_policy=selection
 case $command in
@@ -771,3 +785,16 @@ operation_repos=$repos
 excluded_repos=
 
 "cmd_${command}"
+
+if [ "$post_command" = yes ]; then
+    if [ "$dry_run" = yes ]; then
+        printf '\nWould run after install:'
+        printf ' [%s]' "$@"
+        printf '\n'
+    else
+        # Prefer the freshly installed commands, preserving exact argument boundaries.
+        PATH="$BIN_DIR:$PATH"
+        export PATH
+        exec "$@"
+    fi
+fi
