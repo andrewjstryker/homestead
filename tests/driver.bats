@@ -170,3 +170,45 @@ MAKEFILE
     [ ! -e "$XDG_CONFIG_HOME" ]
     [ ! -e "$collection/base/.homestead" ]
 }
+
+@test "install command tail preserves arguments and inherits resolved environment" {
+    export CONFIG_ENV=$work/command.env
+    printf 'TOOLCHAINS="rust go"\n' > "$CONFIG_ENV"
+    mkdir -p "$collection/base/src/bin"
+    cat > "$collection/base/src/bin/after-install" <<'SCRIPT'
+#!/bin/sh
+[ -f "$XDG_CONFIG_HOME/base.conf" ] || exit 90
+mkdir -p "$XDG_STATE_HOME"
+printf '%s\n' "$TOOLCHAINS" "$@" > "$XDG_STATE_HOME/command-result"
+SCRIPT
+    chmod +x "$collection/base/src/bin/after-install"
+    run "$home" install base -- after-install 'argument with spaces' '$(false)' --flag
+    assert_success
+    [ "$(cat "$XDG_STATE_HOME/command-result")" = $'rust go\nargument with spaces\n$(false)\n--flag' ]
+    run env TOOLCHAINS='' "$home" install base -- after-install override
+    assert_success
+    [ "$(cat "$XDG_STATE_HOME/command-result")" = $'\noverride' ]
+}
+
+@test "install command tail cannot run before success or during dry-run and staging" {
+    run env RSYNC= "$home" install base -- touch "$work/executed"
+    assert_failure
+    [ ! -e "$work/executed" ]
+    run "$home" install base --dry-run -- touch "$work/executed"
+    assert_success
+    assert_output_contains 'Would run after install:'
+    [ ! -e "$work/executed" ]
+    run "$home" install base --destdir "$work/dest" -- touch "$work/executed"
+    assert_failure
+    [ ! -e "$work/executed" ]
+    [ ! -e "$work/dest" ]
+    run "$home" stage base -- touch "$work/executed"
+    assert_failure
+    run "$home" install base --
+    assert_failure
+}
+
+@test "install command tail propagates the command exit status" {
+    run "$home" install base -- sh -c 'exit 17'
+    [ "$status" -eq 17 ]
+}

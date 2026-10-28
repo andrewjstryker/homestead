@@ -70,3 +70,13 @@ to the module or configuration collection.
 CI runs `make lint` and `make test` on Ubuntu 24.04 for every pull request to
 `main` and every push to `main`. Repository maintainers can find branch protection
 setup in the [administration guide](.github/README.md).
+
+## Commands after installation
+
+`home install [modules...] -- COMMAND [ARGUMENTS...]` runs a command after every
+selected module has installed successfully. The command inherits the driver's
+resolved `.env` and XDG values, and `BIN_DIR` is prepended to PATH. Arguments are
+preserved without shell evaluation. Its exit status becomes the driver's status;
+completed installations are not rolled back. Dry-run reports the command without
+executing it. A trailing command is only valid for `install` and cannot accompany
+`DESTDIR` (including `--destdir`); these errors are rejected before installation.
