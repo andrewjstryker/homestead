@@ -9,6 +9,8 @@ between modules and the collection driver. Setup and examples belong in the
 ## Declarations
 
 The module chooses its Homestead include path and must not invoke the driver.
+It includes `prelude.mk` before anything else and `homestead.mk` after its
+declarations (see [collection environment](#collection-environment)).
 Default roots are `src`, `stage`, and `vendor`. Set alternate roots and
 `required_inputs`, `claimed_sources`, and `claimed_outputs` before inclusion.
 
@@ -141,11 +143,56 @@ inspecting siblings. Collection `check` compares successful modules' declared
 destinations for equal-path and file/ancestor collisions, including links.
 Paths are compared as declared, without resolving filesystem aliases.
 
+## Collection environment
+
+Every input has exactly one source. A module Makefile includes `prelude.mk`
+first, then sets its `?=` defaults, then includes `homestead.mk`, which refuses
+to run without the prelude. The prelude resolves each input from, in order:
+
+1. a Make command-line assignment, for development and tests;
+2. the environment table named by `ENV_FILE`;
+3. a `?=` default: the shared roots, which the prelude defines, or the module's.
+
+The process environment is not a source. At the top Make level, the prelude
+discards every inherited variable except process plumbing (`plumbing`: `HOME`,
+`PATH`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`,
+`TMPDIR`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`,
+`GPG_TTY`) and Make's own state. Discarded values are absent from recipes too.
+A recursive Make keeps what its parent passes down.
+
+`ENV_FILE` defaults to the module's optional `.env`, which is how a module
+works on its own. An `ENV_FILE` given explicitly must exist; an empty one
+means no table. Recipes see table values in their environment.
+
+The driver passes no input except `ENV_FILE`, so modules need no knowledge of
+the collection. It restarts itself with only plumbing and resolves one table:
+`--env FILE` (relative to the caller, required to exist), otherwise the
+collection's `.env` if present, otherwise none. Under the driver, a module's
+own `.env` is never read. The driver reads the table through `table.mk`, using
+the same prelude, for `MODULES_FIRST`, `MODULES_LAST`, `show`, and the command
+after `--`, which receives the shared roots and table values. `--first LIST`
+and `--last LIST` replace the table's ordering; the last occurrence wins.
+
+A table is data, validated before Make reads it. Each line is blank, a
+whole-line `#` comment, or `NAME=value`: `NAME` is uppercase and appears once,
+there is no space around `=`, and the value is literal to the end of the line.
+It cannot contain `$`, `#`, quotes, backslash, or trailing whitespace. Plumbing,
+`LC_*`, `MAKE*`, `DESTDIR`, `DRY_RUN`, `ENV_FILE`, and `ENV_FRAGMENTS` are
+not table inputs. An empty value is a value; an empty root still fails.
+
+Two floors follow from this. The prelude is the build floor: every module may
+assume the shared roots while it builds, standalone or not. A collection's
+first modules are its runtime floor: they publish resolved values to shells
+through `env.d` fragments. Build-time paths come from Make (`M4_*` or recipe
+variables), never from a runtime floor's exports. Honoring an inherited value
+would make the last installation an input to the next: a changed default or
+table entry would lose to a stale export, and the build would stamp it in again.
+
 ## Collection composition
 
 `MODULES_FIRST` names shared environment providers; middle modules contribute
 domain configuration; `MODULES_LAST` names consumers. Both lists default to
-empty and contain newline-separated names. First/last follow configured order;
+empty and contain space-separated names. First/last follow configured order;
 middle modules have no ordering dependency on one another.
 
 During `stage`, `preview`, `install`, and `apply`, selecting a last module also

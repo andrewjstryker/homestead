@@ -23,7 +23,8 @@ setup() {
     assert_success
     assert_output_contains "$LIBEXEC_DIR/example/helper"
     export HOMESTEAD_ROOT=$work MODULES_FIRST='' MODULES_LAST=''
-    run "$home" show module
+    drive_vars+=(HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST)
+    run drive show module
     assert_success
     assert_output_contains "$LIBEXEC_DIR"
 }
@@ -44,11 +45,11 @@ setup() {
     run make_module preview
     assert_success
     [ ! -e "$LIBEXEC_DIR" ]
-    export DESTDIR=$work/dest
-    make_module install
+    DESTDIR=$work/dest
+    make_module install DESTDIR="$DESTDIR"
     [ -x "$DESTDIR$LIBEXEC_DIR/example/helper" ]
     [ ! -e "$LIBEXEC_DIR" ]
     [ "$(cat "$DESTDIR$XDG_CONFIG_HOME/caller")" = "helper=$LIBEXEC_DIR/example/helper" ]
-    make_module uninstall
+    make_module uninstall DESTDIR="$DESTDIR"
     [ ! -e "$DESTDIR$LIBEXEC_DIR/example/helper" ]
 }

@@ -1,0 +1,59 @@
+#!/bin/sh
+# env-table FILE [optional] -- validate an environment table for Make.
+#
+# A table is data that both Make and the driver read, so its format is the
+# subset on which they cannot disagree:
+#
+#   NAME=value     NAME is uppercase; the value is literal to end of line
+#   # comment      whole-line comments and blank lines are ignored
+#
+# No quotes, $, #, or backslash in values, no space around =, and no trailing
+# space: each would mean something different to some reader. Each name appears
+# once. Plumbing (see ../plumbing) comes from the process, and DESTDIR,
+# DRY_RUN, ENV_FILE, and ENV_FRAGMENTS from the driver, never from a table.
+#
+# A missing FILE is an error unless "optional" is given. Diagnostics go to
+# stderr; the exit status is nonzero for any problem.
+#
+# Output is for prelude.mk, which reads it through $(shell), where newlines
+# become spaces. Each entry is therefore its assignment followed by the
+# record of its name, each ended by #, which no value can contain:
+#
+#   NAME=value#homestead_table_vars += NAME#
+set -eu
+
+file=$1
+if [ ! -f "$file" ]; then
+	[ "${2-}" = optional ] && exit 0
+	printf 'no such environment table: %s\n' "$file" >&2
+	exit 1
+fi
+
+plumbing=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)/plumbing
+
+awk -v file="$file" -v plumbing="$plumbing" '
+	BEGIN {
+		while ((getline name < plumbing) > 0)
+			if (name != "") reserved[name] = 1
+		split("DESTDIR DRY_RUN ENV_FILE ENV_FRAGMENTS", driver, " ")
+		for (i in driver) reserved[driver[i]] = 1
+	}
+	function fail(message) {
+		printf "%s:%d: %s\n", file, NR, message > "/dev/stderr"
+		bad = 1
+	}
+	/^#/ || /^$/ { next }
+	!/^[A-Z_][A-Z0-9_]*=/ { fail("expected NAME=value with an uppercase NAME"); next }
+	{
+		name = substr($0, 1, index($0, "=") - 1)
+		value = substr($0, index($0, "=") + 1)
+	}
+	value ~ /[$#"\047\\]/ { fail(name ": values cannot contain $, #, quotes, or backslash"); next }
+	value ~ /[ \t\r]$/ { fail(name ": trailing whitespace"); next }
+	name in reserved || name ~ /^LC_/ || name ~ /^MAKE/ {
+		fail(name ": not a table input"); next
+	}
+	name in seen { fail(name ": set more than once"); next }
+	{ seen[name] = 1; printf "%s#homestead_table_vars += %s#\n", $0, name }
+	END { exit bad }
+' "$file"

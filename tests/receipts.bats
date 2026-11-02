@@ -4,8 +4,8 @@ source "$BATS_TEST_DIRNAME/test_helper.bash"
 setup() {
     setup_sandbox
     minimal_module
-    printf 'required_inputs := REQUIRED\nREQUIRED ?= ready\nlinks := config/example\n' > "$module/Makefile"
-    printf 'include ${HOMESTEAD_MK}\n' >> "$module/Makefile"
+    printf 'include ../_homestead/prelude.mk\nrequired_inputs := REQUIRED\nREQUIRED ?= ready\nlinks := config/example\n' > "$module/Makefile"
+    printf 'include ../_homestead/homestead.mk\n' >> "$module/Makefile"
     mkdir -p "$module/vendor/data" "$module/src/bin"
     printf 'version one\n' > "$module/src/config/example"
     printf 'obsolete\n' > "$module/src/config/obsolete"
@@ -123,13 +123,13 @@ setup() {
 }
 
 @test "failed transfers do not append records but earlier successful namespaces remain owned" {
-    export REAL_RSYNC
-    REAL_RSYNC=$(command -v rsync)
-    cat > "$work/fail-rsync" <<'SCRIPT'
+    # Recipes see only resolved inputs, so the wrapper names rsync itself.
+    real_rsync=$(command -v rsync)
+    cat > "$work/fail-rsync" <<SCRIPT
 #!/bin/sh
-"$REAL_RSYNC" "$@" || exit
+'$real_rsync' "\$@" || exit
 for arg do
-    case $arg in stage/data/ | */stage/data/) exit 23 ;; esac
+    case \$arg in stage/data/ | */stage/data/) exit 23 ;; esac
 done
 SCRIPT
     chmod +x "$work/fail-rsync"
@@ -141,7 +141,7 @@ SCRIPT
     run grep -F "$XDG_DATA_HOME/payload" "$receipt"
     [ "$status" -eq 1 ]
     cp "$receipt" "$work/before"
-    printf '#!/bin/sh\n"$REAL_RSYNC" "$@" || exit\nexit 23\n' > "$work/fail-rsync"
+    printf '#!/bin/sh\n%s "$@" || exit\nexit 23\n' "'$real_rsync'" > "$work/fail-rsync"
     run make_module install RSYNC="$work/fail-rsync"
     assert_failure
     cmp "$receipt" "$work/before"

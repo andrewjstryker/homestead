@@ -1,4 +1,5 @@
-include ${HOMESTEAD_MK}
+include ../_homestead/prelude.mk
+include ../_homestead/homestead.mk
 
 .PHONY: fail-check
 fail-check:

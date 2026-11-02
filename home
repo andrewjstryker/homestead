@@ -3,9 +3,9 @@
 # home — Homestead collection driver.
 #
 # Coordinates independent module Makefiles through the Homestead interface.
-# Collection policy lives in caller environment values or a small wrapper.
+# Collection policy lives in one environment table and a small wrapper.
 #
-# usage: home [--root DIR] <verb> [module...] [options]
+# usage: home [--root DIR] [--env FILE] [--first LIST] [--last LIST] <verb> [module...] [options]
 #
 #   show       [module...]    print resolved paths and modules
 #   check      [module...]    run full preflight without staging or installing
@@ -29,28 +29,64 @@
 # options:
 #   -- COMMAND [ARG...]     run after successful live install (not with --destdir)
 #   --root DIR              collection directory (before verb; default: cwd)
+#   --env FILE              environment table (default: .env in the collection)
+#   --first LIST            shared environment providers (overrides MODULES_FIRST)
+#   --last LIST             environment consumers (overrides MODULES_LAST)
 #   --dry-run               preview destination changes (staging may write locally)
 #   --destdir DIR           staged-root prefix for every written path
 #
-# environment:
-#   DESTDIR XDG_CONFIG_HOME XDG_RUNTIME_DIR BIN_DIR LIBEXEC_DIR HOME MAKE
-#   HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST (newline-separated lists)
+# environment: ignored, apart from process plumbing (HOME, PATH, the terminal,
+# locale, and session sockets). Every module reads the one table, as NAME=value
+# lines, and supplies its own defaults; MODULES_FIRST and MODULES_LAST there
+# are space-separated module names.
 #
 set -eu
 
 # Resolve code and collection independently; the driver may live in _homestead.
 script_dir=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 script=${script_dir}/home
-collection_root=${HOMESTEAD_ROOT:-$PWD}
-if [ "${1-}" = --root ]; then
-    [ "$#" -ge 2 ] && [ -n "$2" ] || {
-        printf 'home: --root requires a directory\n' >&2
-        exit 2
-    }
-    collection_root=$2
-    shift 2
+
+#------------------------------------------------------------------------------#
+# Environment policy
+#
+# The driver is the source of environment policy. Installed modules export
+# their values into every shell through env.d fragments (MAILDIR, the XDG
+# roots, ...). Read back as inputs, the last install would decide the next one:
+# a changed default or table entry would lose to a stale export, and the build
+# would stamp that export in again. So the driver restarts itself with only
+# process plumbing, names one table, and passes each module only its name.
+# Modules apply the same rule through prelude.mk when run directly.
+#------------------------------------------------------------------------------#
+
+if [ "${HOMESTEAD_SCRUBBED-}" != 1 ]; then
+	count=$#
+	set -- "$@" env -i HOMESTEAD_SCRUBBED=1
+	# A trailing * in the plumbing list is a name prefix, such as LC_*.
+	for entry in $(cat "$script_dir/plumbing"); do
+		case $entry in
+			*'*') names=$(env | sed -n "s/^\(${entry%'*'}[A-Za-z0-9_]*\)=.*/\1/p") ;;
+			*) names=$entry ;;
+		esac
+		for name in $names; do
+			present=
+			eval "present=\${$name+x}"
+			[ "$present" = x ] || continue
+			eval "value=\${$name}"
+			set -- "$@" "$name=$value"
+		done
+	done
+	set -- "$@" /bin/sh "$script"
+	# Move the original arguments behind the command they now belong to.
+	while [ "$count" -gt 0 ]; do
+		set -- "$@" "$1"
+		shift
+		count=$((count - 1))
+	done
+	exec "$@"
 fi
-cd -- "$collection_root"
+unset HOMESTEAD_SCRUBBED
+MAKE='make'
+DESTDIR=
 
 # Every list this script splits is newline-separated, so that paths containing
 # spaces survive word splitting.  Command flags are therefore always written
@@ -59,68 +95,37 @@ newline='
 '
 IFS=$newline
 
-# Machine inputs are data, not sourced shell. Existing environment values,
-# including explicitly empty ones, take precedence over the collection .env.
-: "${CONFIG_ENV:=.env}"
-
-read_env_file() {
-	[ -f "$1" ] || return 0
-
-	while IFS= read -r line || [ -n "$line" ]; do
-		case $line in
-			''|'#'*) continue ;;
-			*=*) ;;
-			*) continue ;;
-		esac
-
-		key=${line%%=*}
-		val=${line#*=}
-
-		# NAME = value and NAME=value mean the same thing.
-		key=$(printf '%s' "$key" | tr -d ' 	')
-		val=${val# }
-
-		# One layer of surrounding quotes comes off, if both ends match.
-		case $val in
-			'"'*'"') val=${val#?}; val=${val%?} ;;
-			"'"*"'") val=${val#?}; val=${val%?} ;;
-		esac
-
-		# A name that is not a name is a typo, not an instruction.
-		case $key in
-			''|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
-		esac
-
-		# Already set in the environment? Leave it alone.
-		present=
-		eval "present=\${$key+x}"
-		[ "$present" = x ] || export "$key=$val"
-	done < "$1"
+# Resolve the table as every module does: by asking Make, through the same
+# prelude. Module names in the ordering lists are space-separated there.
+load_table() {
+	table=$("${MAKE}" --no-print-directory -s -f "$script_dir/table.mk" \
+		ENV_FILE="$env_file" table) || exit 2
+	table_names=
+	MODULES_FIRST=
+	MODULES_LAST=
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		name=${line%%=*}
+		eval "$name=\${line#*=}"
+		table_names="${table_names}${table_names:+${newline}}${name}"
+	done <<EOF
+$table
+EOF
+	for name in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR; do
+		eval "value=\${$name}"
+		[ -n "$value" ] || { printf 'home: %s must not be empty\n' "$name" >&2; exit 2; }
+	done
+	# Options carry a leading = so that an explicitly empty list still counts.
+	[ -z "$first_option" ] || MODULES_FIRST=${first_option#=}
+	[ -z "$last_option" ] || MODULES_LAST=${last_option#=}
 }
 
-read_env_file "${CONFIG_ENV}"
-
-# Resolve shared roots once. Unset values default; explicit empty roots fail,
-# matching direct Make invocation. Application inputs pass through unchanged.
-: "${HOME:?HOME must be set}"
-: "${XDG_CONFIG_HOME=${HOME}/.config}"
-: "${XDG_CONFIG_HOME:?XDG_CONFIG_HOME must not be empty}"
-: "${XDG_DATA_HOME=${HOME}/.local/share}"
-: "${XDG_DATA_HOME:?XDG_DATA_HOME must not be empty}"
-: "${XDG_STATE_HOME=${HOME}/.local/state}"
-: "${XDG_STATE_HOME:?XDG_STATE_HOME must not be empty}"
-: "${XDG_CACHE_HOME=${HOME}/.cache}"
-: "${XDG_CACHE_HOME:?XDG_CACHE_HOME must not be empty}"
-: "${BIN_DIR=${HOME}/.local/bin}"
-: "${BIN_DIR:?BIN_DIR must not be empty}"
-: "${LIBEXEC_DIR=${HOME}/.local/libexec}"
-: "${LIBEXEC_DIR:?LIBEXEC_DIR must not be empty}"
-: "${DESTDIR:=}"
-: "${MAKE:=make}"
-: "${MODULES_FIRST=}"
-: "${MODULES_LAST=}"
-
-export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR
+# Every module invocation names the table and nothing else of the collection.
+module_make() {
+	module_dir=$1
+	shift
+	"${MAKE}" --no-print-directory -C "$module_dir" ENV_FILE="$env_file" "$@"
+}
 
 #------------------------------------------------------------------------------#
 # Modules
@@ -132,9 +137,6 @@ export XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEX
 # Collection ordering policy. These configurable lists are filtered against the modules
 # selected for each command: named first modules lead, named last modules
 # trail, and every other selected module retains its discovery order.
-modules_first=${MODULES_FIRST}
-modules_last=${MODULES_LAST}
-
 listed() {
 	needle=$1
 	list=$2
@@ -144,12 +146,16 @@ listed() {
 	return 1
 }
 
-for module in $modules_first; do
-	if listed "$module" "$modules_last"; then
-		printf 'home: module is both first and last: %s\n' "$module" >&2
-		exit 2
-	fi
-done
+resolve_ordering() {
+	modules_first=$(printf '%s\n' "$MODULES_FIRST" | tr ' \t' '\n\n' | sed '/^$/d')
+	modules_last=$(printf '%s\n' "$MODULES_LAST" | tr ' \t' '\n\n' | sed '/^$/d')
+	for module in $modules_first; do
+		if listed "$module" "$modules_last"; then
+			printf 'home: module is both first and last: %s\n' "$module" >&2
+			exit 2
+		fi
+	done
+}
 
 module_repos() {
 	for dir in */; do
@@ -346,7 +352,7 @@ stage_before_last() {
 			continue
 		fi
 
-		if stage_output=$("${MAKE}" --no-print-directory -C "$repo" stage 2>&1)
+		if stage_output=$(module_make "$repo" stage 2>&1)
 		then
 			staged_repos="${staged_repos}${staged_repos:+${newline}}${repo}"
 			ready="${ready}${ready:+${newline}}${repo}"
@@ -378,7 +384,7 @@ collect_fragments() {
 	for repo in $(module_repos); do
 		listed "$repo" "$modules_last" && continue
 		listed "$repo" "${excluded_repos-}" && continue
-		if fragment_output=$("${MAKE}" --no-print-directory -C "$repo" staged-fragment-files); then
+		if fragment_output=$(module_make "$repo" staged-fragment-files); then
 			:
 		else
 			printf 'home: could not inspect staged fragments for %s\n' "$repo" >&2
@@ -425,7 +431,7 @@ recurse() {
 		printf '\n==> %s: %s\n' "$repo" "$target"
 		fragment_input=
 		listed "$repo" "$modules_last" && fragment_input=${fragments-}
-		if "${MAKE}" --no-print-directory -C "$repo" "$target" \
+		if module_make "$repo" "$target" \
 		       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
 		       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"
 		then
@@ -448,7 +454,7 @@ target_exists() {
 	database=
 	probe_status=0
 	target_probe_status=0
-	database=$(${MAKE} --no-print-directory -C "$repo" -qp 2>&1) || probe_status=$?
+	database=$(module_make "$repo" -qp 2>&1) || probe_status=$?
 	if [ "$probe_status" -gt 1 ]; then
 		target_probe_output=$database
 		target_probe_status=2
@@ -471,7 +477,7 @@ cmd_test() {
 			printf '\n==> %s: test\n' "$repo"
 			fragment_input=
 			listed "$repo" "$modules_last" && fragment_input=${fragments-}
-			if "${MAKE}" --no-print-directory -C "$repo" test \
+			if module_make "$repo" test \
 			       DESTDIR="${DESTDIR}" ENV_FRAGMENTS="$fragment_input" \
 			       DRY_RUN="$([ "$dry_run" = yes ] && printf 1)"; then
 				:
@@ -512,7 +518,7 @@ preflight_tools() {
 	ready=
 
 	for repo in $operation_repos; do
-		if tool_output=$("${MAKE}" --no-print-directory -C "$repo" "$target" \
+		if tool_output=$(module_make "$repo" "$target" \
 		     DESTDIR="${DESTDIR}" DRY_RUN="$([ "$dry_run" = yes ] && printf 1)" \
 		     2>&1); then
 			ready="${ready}${ready:+${newline}}${repo}"
@@ -550,9 +556,7 @@ cmd_show() {
 	printf '  BIN_DIR............ %s\n' "${BIN_DIR}"
 	printf '  LIBEXEC_DIR........ %s\n' "${LIBEXEC_DIR}"
 	printf '  DESTDIR............ %s\n' "${DESTDIR}"
-	printf '  MAKE............... %s\n' "${MAKE}"
-	printf '  CONFIG_ENV......... %s\n' \
-		"$([ -f "${CONFIG_ENV}" ] && printf '%s' "${CONFIG_ENV}" || printf '%s (absent)' "${CONFIG_ENV}")"
+	printf '  ENV_FILE........... %s\n' "${env_file:-(none)}"
 	printf '  MODULES_FIRST...... %s\n' "${MODULES_FIRST}"
 	printf '  MODULES_LAST....... %s\n' "${MODULES_LAST}"
 
@@ -666,7 +670,7 @@ check_collisions() (
     records=$(mktemp)
     trap 'rm -f "$records"' EXIT HUP INT TERM
     for repo in $operation_repos; do
-        inspection=$("${MAKE}" --no-print-directory -C "$repo" inspect) || return 1
+        inspection=$(module_make "$repo" inspect) || return 1
         printf '%s\n' "$inspection" |
             awk -F '\t' -v owner="$repo" '
                 $1 == "file" || $1 == "link" { print $5 "\t" owner }
@@ -702,6 +706,48 @@ check_collisions() (
 # Dispatch
 #------------------------------------------------------------------------------#
 
+root_option=
+env_option=
+first_option=
+last_option=
+
+# Collection options may precede the verb, so a wrapper can fix policy and
+# still pass any verb through. A later --first or --last replaces an earlier.
+while [ $# -gt 0 ]; do
+	case $1 in
+		--root)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || {
+				printf 'home: --root requires a directory\n' >&2
+				exit 2
+			}
+			root_option=$2
+			shift
+			;;
+		--env)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			env_option=$2
+			shift
+			;;
+		--env=*)
+			env_option=${1#--env=}
+			[ -n "$env_option" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			;;
+		--first | --last)
+			[ "$#" -ge 2 ] || { printf 'home: %s requires a module list\n' "$1" >&2; exit 2; }
+			eval "${1#--}_option==\$2"
+			shift
+			;;
+		--first=* | --last=*)
+			option=${1%%=*}
+			eval "${option#--}_option==\${1#*=}"
+			;;
+		*)
+			break
+			;;
+	esac
+	shift
+done
+
 command=${1:-help}
 [ $# -eq 0 ] || shift
 case $command in -h | --help) command=help ;; esac
@@ -722,6 +768,24 @@ while [ $# -gt 0 ]; do
             ;;
 		--dry-run)
 			dry_run=yes
+			;;
+		--env)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			env_option=$2
+			shift
+			;;
+		--env=*)
+			env_option=${1#--env=}
+			[ -n "$env_option" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			;;
+		--first | --last)
+			[ "$#" -ge 2 ] || { printf 'home: %s requires a module list\n' "$1" >&2; exit 2; }
+			eval "${1#--}_option==\$2"
+			shift
+			;;
+		--first=* | --last=*)
+			option=${1%%=*}
+			eval "${option#--}_option==\${1#*=}"
 			;;
 		--destdir)
 			shift
@@ -767,6 +831,20 @@ case $command in
 		;;
 esac
 
+# Resolve the collection, then its one table. An explicit --env names a file
+# relative to the caller and must exist; the collection .env is optional. With
+# neither, modules get no table at all, never their own standalone .env.
+collection_root=${root_option:-$PWD}
+if [ -n "$env_option" ]; then
+	case $env_option in /*) ;; *) env_option=$PWD/$env_option ;; esac
+	[ -f "$env_option" ] || { printf 'home: no such env file: %s\n' "$env_option" >&2; exit 2; }
+fi
+cd -- "$collection_root"
+env_file=$env_option
+[ -n "$env_file" ] || [ ! -f .env ] || env_file=$PWD/.env
+load_table
+resolve_ordering
+
 if [ "$post_command" = yes ]; then
     [ "$command" = install ] || { echo 'home: a command after -- requires install' >&2; exit 2; }
     [ -z "$DESTDIR" ] || { echo 'home: a command after -- cannot run with --destdir' >&2; exit 2; }
@@ -792,7 +870,11 @@ if [ "$post_command" = yes ]; then
         printf ' [%s]' "$@"
         printf '\n'
     else
-        # Prefer the freshly installed commands, preserving exact argument boundaries.
+        # The command sees the roots and table every module resolved, and
+        # prefers the freshly installed commands. Argument boundaries are exact.
+        for name in $table_names; do
+            export "${name?}"
+        done
         PATH="$BIN_DIR:$PATH"
         export PATH
         exec "$@"

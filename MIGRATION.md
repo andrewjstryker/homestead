@@ -68,6 +68,34 @@ floor, middle modules contribute domain environment, and last modules assemble
 it. No new build or install dependency is introduced. Homestead guarantees
 ordered contribution delivery; consumer tests own runtime evaluation.
 
+## 2.0.0: one source for every input
+
+Previously an inherited value beat the collection `.env` and module defaults.
+Installed `env.d` fragments export values into every shell, so the last install
+became an input to the next: a moved mail root was rebuilt with the stale
+exported path. Now neither the driver nor a module reads the caller's
+environment beyond process plumbing (see the
+[environment contract](CONTRACT.md#collection-environment)).
+
+- **Modules:** add `include .../prelude.mk` as the first line of each module
+  Makefile, before any `?=`. `homestead.mk` stops with an error without it.
+  Remove module-owned `-include .env` lines: the prelude reads the table.
+- **Tables:** `.env` files are data, `NAME=value` with uppercase names, and
+  validated. Remove quotes and spaces around `=`. Move Make syntax (`?=`,
+  `$(if ...)`) into the Makefile as defaults. A module `.env` applies only to
+  standalone builds; under the driver every module reads the collection table,
+  so move machine values the collection needs into it.
+- **Tests and direct Make:** pass inputs as Make arguments (`make stage
+  EMAIL=x`) or with `ENV_FILE=table`, not as exported variables. Command-line
+  values still override the table.
+- **Driver:** `CONFIG_ENV`, `HOMESTEAD_ROOT`, and `MAKE` are no longer read.
+  Use `--env FILE` and `--root DIR`. Pass per-run inputs in another table with
+  `--env`. Wrappers set ordering with `--first`/`--last` or the table, and
+  ordering lists are space-separated rather than newline-separated.
+- **Independent Homestead pins:** modules with their own `_homestead` (such as
+  nvim) keep their pinned behavior until updated. The driver passes them only
+  `ENV_FILE`, so they see their defaults rather than the collection's values.
+
 ## Unreleased 1.0.0: stage collects errors; installation stops
 
 These changes refine the initial, unreleased 1.0.0 contract and do not require a

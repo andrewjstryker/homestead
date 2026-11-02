@@ -1,6 +1,4 @@
-HOMESTEAD_MK ?= ../../homestead.mk
-
-
+include ../_homestead/prelude.mk
 CONTEXT_INPUT ?= required-context
 required_inputs := CONTEXT_INPUT
 claimed_sources = ${src}/config/claimed.upper
@@ -22,7 +20,7 @@ stage_tools   := STAGE_TOOL TRANSFORM_TOOL
 install_tools := INSTALL_TOOL
 sync_tools    := SYNC_TOOL
 
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
 
 ${stage}/config/claimed: ${src}/config/claimed.upper
 	'${TRANSFORM_TOOL}' '[:lower:]' '[:upper:]' < '$<' > '$@'

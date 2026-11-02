@@ -74,8 +74,9 @@ setup in the [administration guide](.github/README.md).
 ## Commands after installation
 
 `home install [modules...] -- COMMAND [ARGUMENTS...]` runs a command after every
-selected module has installed successfully. The command inherits the driver's
-resolved `.env` and XDG values, and `BIN_DIR` is prepended to PATH. Arguments are
+selected module has installed successfully. The command receives process
+plumbing, the shared roots, and the table's values, as modules resolved them,
+and `BIN_DIR` is prepended to PATH. Arguments are
 preserved without shell evaluation. Its exit status becomes the driver's status;
 completed installations are not rolled back. Dry-run reports the command without
 executing it. A trailing command is only valid for `install` and cannot accompany

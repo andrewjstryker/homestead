@@ -8,6 +8,13 @@
 # either tree, and unmapped vendor directories such as vendor/build, are private.
 
 homestead_mk := $(lastword ${MAKEFILE_LIST})
+
+# Inputs and the shared roots are resolved by the prelude, which must run
+# before any module default; a ?= evaluated earlier would already have taken
+# an inherited value.
+ifndef homestead_prelude
+$(error include prelude.mk, beside homestead.mk, first in $(firstword ${MAKEFILE_LIST}))
+endif
 homestead_bin := $(patsubst %/,%,$(dir ${homestead_mk}))/bin
 
 ifeq ($(origin SHELL),default)
@@ -38,16 +45,9 @@ endef
 
 # Environment -----------------------------------------------------------------
 
-XDG_CONFIG_HOME ?= ${HOME}/.config
-XDG_DATA_HOME   ?= ${HOME}/.local/share
-XDG_STATE_HOME  ?= ${HOME}/.local/state
-XDG_CACHE_HOME  ?= ${HOME}/.cache
-BIN_DIR         ?= ${HOME}/.local/bin
-LIBEXEC_DIR     ?= ${HOME}/.local/libexec
+# The roots and their defaults come from prelude.mk.
 required_inputs ?=
-
-path_vars := \
-  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR
+path_vars := ${homestead_root_vars}
 
 require_nonempty = $(if $(strip $($1)),,$(error $1 must not be empty))
 $(foreach v,HOME ${path_vars},$(call require_nonempty,$v))
@@ -333,6 +333,7 @@ show:
 	$(foreach v,HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR BIN_DIR LIBEXEC_DIR,\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})
 	printf '  %-20s %s\n' 'DESTDIR' '${DESTDIR}'
+	printf '  %-20s %s\n' 'ENV_FILE' '$(if $(strip ${ENV_FILE}),${ENV_FILE}$(if $(strip ${homestead_table_vars}),, (empty or absent)),(none))'
 	printf '  %-20s %s\n' 'receipt' '${receipt_file}'
 	$(foreach v,${show_vars},\
 	  printf '  %-20s %s\n' '$v' '${$v}';${nl})

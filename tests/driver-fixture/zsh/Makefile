@@ -1,5 +1,6 @@
+include ../_homestead/prelude.mk
 claimed_outputs := stage/config/composed.conf
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
 
 ZSH_TOOL ?= /bin/true
 stage_tools += ZSH_TOOL
