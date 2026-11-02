@@ -4,16 +4,19 @@ source "$BATS_TEST_DIRNAME/test_helper.bash"
 setup() {
     setup_sandbox
     export HOMESTEAD_ROOT=$work
-    export MODULES_FIRST=floor MODULES_LAST=$'shell\nother-shell'
+    export MODULES_FIRST=floor MODULES_LAST='shell other-shell'
     export EVENTS=$work/events
+    drive_vars+=(HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST EVENTS
+        FAIL_PREFLIGHT FAIL_STAGE FAIL_INSPECT FAIL_INSTALL)
     for module in floor middle other shell other-shell; do
         mkdir -p "$work/$module/src/config/env.d"
         printf '%s\n' "$module" >"$work/$module/src/config/env.d/$module.sh"
         cat >"$work/$module/Makefile" <<'MAKEFILE'
+include ../_homestead/prelude.mk
 module := $(notdir ${CURDIR})
 stage_tools += FIXTURE_TOOL
 FIXTURE_TOOL = $(if $(filter ${module},${FAIL_PREFLIGHT}),,/bin/true)
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
 .PHONY: observe-stage observe-install observe-sync observe-inspect
 observe-stage: check-stage-tools
 	printf 'stage %s\n' '${module}' >> "$${EVENTS}"
@@ -42,7 +45,7 @@ assert_stage_failure() {
     local -a modules=()
     [ "$selection" != explicit ] || modules=(floor middle other shell other-shell)
     export "$variable=floor middle"
-    run "$home" stage "${modules[@]}"
+    run drive stage "${modules[@]}"
     assert_failure
     assert_output_contains "FAILED ($phase): floor middle"
     [ "$(grep -c '^stage other$' "$EVENTS")" -eq 1 ]
@@ -58,7 +61,7 @@ assert_install_failure() {
     [ "$selection" != explicit ] || modules=(floor middle other shell other-shell)
     export "$variable=middle other"
     : > "$EVENTS"
-    run "$home" "$verb" "${modules[@]}"
+    run drive "$verb" "${modules[@]}"
     assert_failure
     assert_output_contains "FAILED ($phase): middle"
     [[ "$output" != *"FAILED ($phase): other"* ]]
@@ -144,7 +147,7 @@ assert_install_failure() {
 
 @test "stage continues after failures without a fragment consumer" {
     : > "$EVENTS"
-    run env FAIL_STAGE=middle "$home" stage middle other
+    run drive FAIL_STAGE=middle stage middle other
     assert_failure
     grep -qx 'stage other' "$EVENTS"
     run grep '^inspect ' "$EVENTS"
@@ -153,7 +156,7 @@ assert_install_failure() {
 
 @test "install stops after staging failures without a fragment consumer" {
     : > "$EVENTS"
-    run env FAIL_STAGE=middle "$home" install middle other
+    run drive FAIL_STAGE=middle install middle other
     assert_failure
     assert_output_contains 'FAILED (install): middle'
     run grep -x 'stage other' "$EVENTS"
@@ -164,7 +167,7 @@ assert_runtime_install_failure() {
     local verb=$1
     shift
     : > "$EVENTS"
-    run env FAIL_INSTALL=middle "$home" "$verb" floor middle other shell "$@"
+    run drive FAIL_INSTALL=middle "$verb" floor middle other shell "$@"
     assert_failure
     assert_output_contains 'FAILED (install): middle'
     grep -qx 'install floor' "$EVENTS"
@@ -185,7 +188,7 @@ assert_runtime_install_failure() {
 }
 
 @test "successful producers stage once and consumers receive the same fragments" {
-    run "$home" stage
+    run drive stage
     assert_success
     [ "$(grep -c '^stage ' "$EVENTS")" -eq 5 ]
     cmp "$work/shell/received-fragments" "$work/other-shell/received-fragments"

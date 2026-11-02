@@ -8,9 +8,10 @@ setup() {
     printf plain > "$module/src/config/plain"
     printf 'M4_VALUE\n' > "$module/src/config/rendered.m4"
     cat > "$module/Build.mk" <<'MAKEFILE'
+include ../_homestead/prelude.mk
 required_inputs = VALUE
 claimed_outputs = stage/config/generated/one stage/config/generated/two
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
 
 # Target-specific input must remain visible during preflight, even with -f.
 check: VALUE = configured
@@ -20,7 +21,7 @@ ${claimed_outputs}:
 	printf generated > '$@'
 	printf '%s\n' '$@' >> builds
 MAKEFILE
-    graph_make() { make --no-print-directory -j4 -C "$module" -f Build.mk "$@"; }
+    graph_make() { make_module -j4 -f Build.mk "$@"; }
 }
 
 @test "target-specific preflight inputs work with alternate Makefiles without staging" {

@@ -18,8 +18,12 @@ example/
 Start with this Makefile:
 
 ```make
+include _homestead/prelude.mk
 include _homestead/homestead.mk
 ```
+
+The prelude comes first and decides where inputs come from; module defaults
+and declarations go between the two lines.
 
 Put your application's settings in `src/config/example/settings`. Homestead
 copies it to `stage/config/example/settings` and installs it beneath
@@ -77,6 +81,7 @@ and removal behavior.
 Replace the Makefile with:
 
 ```make
+include _homestead/prelude.mk
 required_inputs := EMAIL
 EDITOR ?= vi
 m4_vars += EDITOR
@@ -91,11 +96,17 @@ email=M4_EMAIL
 editor=M4_EDITOR
 ```
 
-Supply the required value when building:
+Supply the required value when building, either for one run or in the
+module's `.env`:
 
 ```sh
 make stage EMAIL=person@example.com
+printf 'EMAIL=person@example.com\n' > .env && make stage
 ```
+
+An exported `EMAIL` in your shell is ignored: inputs come from the command
+line, then `.env`, then `?=` defaults. `.env` holds `NAME=value` lines and
+nothing else, no quotes or Make syntax; `make show` reports the table in use.
 
 The result is `stage/config/example/settings`. Required inputs and names listed
 in `m4_vars` become `M4_NAME` macros. Changes to those values trigger rendering.
@@ -112,6 +123,7 @@ For Fennel-to-Lua compilation, install Fennel and create
 of that source:
 
 ```make
+include _homestead/prelude.mk
 FENNEL ?= $(shell command -v fennel)
 claimed_sources := src/config/nvim/init.fnl
 claimed_outputs := stage/config/nvim/init.lua
@@ -147,8 +159,8 @@ collection/
   zsh/Makefile
 ```
 
-Each module now includes `../_homestead/homestead.mk`. Modules do not locate or
-call the driver. From the collection root, run:
+Each module now includes `../_homestead/prelude.mk` and
+`../_homestead/homestead.mk`. Modules do not locate or call the driver. From the collection root, run:
 
 ```sh
 _homestead/home check
@@ -159,22 +171,25 @@ _homestead/home install nvim
 
 The driver discovers child directories containing a Makefile. Names beginning
 with `_` or `.` are excluded, keeping the dependency out of the selection. Use
-`--root DIR` before the verb when invoking it elsewhere. Collection `.env` files
-can supply input defaults as `NAME=value`; existing environment values win.
+`--root DIR` before the verb when invoking it elsewhere. The driver ignores your
+shell's environment apart from process plumbing such as `HOME` and `PATH`.
+It hands every module one table: the collection `.env`, or another named with
+`--env FILE`. Modules' own `.env` files apply only when they are built on their
+own. To try other values, write another table and pass it with `--env`. See the
+[environment contract](CONTRACT.md#collection-environment).
 
 If your modules contribute shell environment fragments, put them under
 `src/config/env.d/` or `vendor/config/env.d/`. Name shared environment providers
-in `MODULES_FIRST` and consumers in `MODULES_LAST`; both accept newline-separated
-names and otherwise default to empty. A collection-owned `home` wrapper can set
-that policy:
+in `MODULES_FIRST` and consumers in `MODULES_LAST`, in the table, or with
+`--first` and `--last`; both take space-separated names and otherwise default
+to empty. A collection-owned `home` wrapper can fix that policy; a later
+`--first` or `--last` on its command line still replaces it:
 
 ```sh
 #!/bin/sh
 set -eu
 root=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
-export MODULES_FIRST="${MODULES_FIRST-base}"
-export MODULES_LAST="${MODULES_LAST-zsh}"
-exec "$root/_homestead/home" --root "$root" "$@"
+exec "$root/_homestead/home" --root "$root" --first base --last zsh "$@"
 ```
 
 Make the wrapper executable. During composing actions, consumers receive ordered

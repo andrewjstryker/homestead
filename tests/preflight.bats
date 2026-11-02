@@ -10,10 +10,11 @@ setup() { setup_sandbox; }
     printf stale > "$work/module/stage/stale"
     printf context > "$work/module/stage/.build/m4-context"
     cat > "$work/module/Makefile" <<'MAKEFILE'
+include ../_homestead/prelude.mk
 required_inputs = REQUIRED_VALUE
 SYNC_TOOL ?= /bin/true
 sync_tools = SYNC_TOOL
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
 MAKEFILE
 
     run make_module -j4 check REQUIRED_VALUE= M4= RSYNC= MD5SUM= SYNC_TOOL=
@@ -80,11 +81,12 @@ MAKEFILE
 @test "explicitly empty installation roots are rejected by Make and the driver" {
     fixture_module
     export HOMESTEAD_ROOT=$work MODULES_FIRST='' MODULES_LAST=''
+    drive_vars+=(HOMESTEAD_ROOT MODULES_FIRST MODULES_LAST)
     for variable in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR; do
         run make_module show "$variable="
         assert_failure
         assert_output_contains "$variable must not be empty"
-        run env "$variable=" "$home" show module
+        run drive "$variable=" show module
         assert_failure
         assert_output_contains "$variable must not be empty"
     done

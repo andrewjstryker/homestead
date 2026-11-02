@@ -1,2 +1,3 @@
+include ../_homestead/prelude.mk
 required_inputs := AVAILABILITY_INPUT
-include ${HOMESTEAD_MK}
+include ../_homestead/homestead.mk
