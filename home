@@ -49,13 +49,13 @@ script=${script_dir}/home
 #------------------------------------------------------------------------------#
 # Environment policy
 #
-# The driver is the source of environment policy. Installed modules export
-# their values into every shell through env.d fragments (MAILDIR, the XDG
-# roots, ...). Read back as inputs, the last install would decide the next one:
-# a changed default or table entry would lose to a stale export, and the build
-# would stamp that export in again. So the driver restarts itself with only
-# process plumbing, names one table, and passes each module only its name.
-# Modules apply the same rule through prelude.mk when run directly.
+# Inputs come from one table, never the inherited environment. Installed
+# modules export their values into every shell through env.d fragments
+# (MAILDIR, the XDG roots, ...). Read back as inputs, the last install would
+# decide the next one: a changed default or table entry would lose to a stale
+# export, and the build would stamp that export in again. So the driver
+# restarts itself with only process plumbing, names the table, and passes each
+# module only that name. Every module enforces the same rule in prelude.mk.
 #------------------------------------------------------------------------------#
 
 if [ "${HOMESTEAD_SCRUBBED-}" != 1 ]; then
@@ -69,6 +69,7 @@ if [ "${HOMESTEAD_SCRUBBED-}" != 1 ]; then
 		esac
 		for name in $names; do
 			present=
+			value=
 			eval "present=\${$name+x}"
 			[ "$present" = x ] || continue
 			eval "value=\${$name}"
@@ -85,7 +86,6 @@ if [ "${HOMESTEAD_SCRUBBED-}" != 1 ]; then
 	exec "$@"
 fi
 unset HOMESTEAD_SCRUBBED
-MAKE='make'
 DESTDIR=
 
 # Every list this script splits is newline-separated, so that paths containing
@@ -96,9 +96,10 @@ newline='
 IFS=$newline
 
 # Resolve the table as every module does: by asking Make, through the same
-# prelude. Module names in the ordering lists are space-separated there.
+# prelude, which also rejects empty roots. Module names in the ordering lists
+# are space-separated there.
 load_table() {
-	table=$("${MAKE}" --no-print-directory -s -f "$script_dir/table.mk" \
+	table=$(make --no-print-directory -s -f "$script_dir/table.mk" \
 		ENV_FILE="$env_file" table) || exit 2
 	table_names=
 	MODULES_FIRST=
@@ -111,10 +112,6 @@ load_table() {
 	done <<EOF
 $table
 EOF
-	for name in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR; do
-		eval "value=\${$name}"
-		[ -n "$value" ] || { printf 'home: %s must not be empty\n' "$name" >&2; exit 2; }
-	done
 	# Options carry a leading = so that an explicitly empty list still counts.
 	[ -z "$first_option" ] || MODULES_FIRST=${first_option#=}
 	[ -z "$last_option" ] || MODULES_LAST=${last_option#=}
@@ -124,7 +121,7 @@ EOF
 module_make() {
 	module_dir=$1
 	shift
-	"${MAKE}" --no-print-directory -C "$module_dir" ENV_FILE="$env_file" "$@"
+	make --no-print-directory -C "$module_dir" ENV_FILE="$env_file" "$@"
 }
 
 #------------------------------------------------------------------------------#
@@ -206,20 +203,8 @@ resolve_repos() {
 	fi
 
 	unknown=
-
 	for name in $selected; do
-		found=no
-
-		for repo in $available; do
-			if [ "$repo" = "$name" ]; then
-				found=yes
-				break
-			fi
-		done
-
-		if [ "$found" = no ]; then
-			unknown="${unknown} ${name}"
-		fi
+		listed "$name" "$available" || unknown="${unknown} ${name}"
 	done
 
 	# Named modules are ordered too: "home install zsh base" is a
@@ -229,21 +214,25 @@ resolve_repos() {
 		return 0
 	fi
 
-	if [ -n "$unknown" ]; then
-		printf 'home: no such module:%s\n' "$unknown" >&2
-
-		if [ -n "$available" ]; then
-			printf 'available:' >&2
-			for repo in $available; do
-				printf ' %s' "$repo" >&2
+	printf 'home: no such module:%s\n' "$unknown" >&2
+	if [ -n "$available" ]; then
+		printf 'available:' >&2
+		for repo in $available; do
+			printf ' %s' "$repo" >&2
 		done
-			printf '\n' >&2
-		else
-			printf 'no modules found\n' >&2
-		fi
-
-		exit 2
+		printf '\n' >&2
+	else
+		printf 'no modules found\n' >&2
 	fi
+	exit 2
+}
+
+# Whether the operation includes a consumer that composes others' fragments.
+selection_has_last() {
+	for repo in $operation_repos; do
+		listed "$repo" "$modules_last" && return 0
+	done
+	return 1
 }
 
 # Check, stage, and installation failures are always errors. Other commands retain
@@ -333,14 +322,7 @@ retain_selected() {
 # modules not selected are never rebuilt; their existing stage is their input.
 stage_before_last() {
 	staged_repos=
-	has_last=no
-	for repo in $operation_repos; do
-		if listed "$repo" "$modules_last"; then
-			has_last=yes
-			break
-		fi
-	done
-	[ "$has_last" = yes ] || return 0
+	selection_has_last || return 0
 
 	warned=
 	failed=
@@ -373,11 +355,7 @@ stage_before_last() {
 # failed this operation so stale or partial outputs cannot mask that failure.
 collect_fragments() {
 	fragments=
-	has_last=no
-	for repo in $operation_repos; do
-		if listed "$repo" "$modules_last"; then has_last=yes; break; fi
-	done
-	[ "$has_last" = yes ] || return 0
+	selection_has_last || return 0
 
 	warned=
 	failed=
@@ -489,16 +467,15 @@ cmd_test() {
 			continue
 		fi
 
-		probe_status=$target_probe_status
-		if [ "$probe_status" -eq 1 ]; then
+		if [ "$target_probe_status" -eq 1 ]; then
 			printf '\n==> %s: test (skipped: no test target)\n' "$repo"
-		elif failure_is_fatal "$repo"; then
-			printf '\n==> %s: test target discovery failed\n' "$repo" >&2
-			[ -z "${target_probe_output-}" ] || printf '%s\n' "$target_probe_output" >&2
+			continue
+		fi
+		printf '\n==> %s: test target discovery failed\n' "$repo" >&2
+		[ -z "${target_probe_output-}" ] || printf '%s\n' "$target_probe_output" >&2
+		if failure_is_fatal "$repo"; then
 			failed="${failed} ${repo}"
 		else
-			printf '\n==> %s: test target discovery failed\n' "$repo" >&2
-			[ -z "${target_probe_output-}" ] || printf '%s\n' "$target_probe_output" >&2
 			warned="${warned} ${repo}"
 		fi
 	done
@@ -623,13 +600,7 @@ cmd_sync() {
 }
 
 cmd_apply() {
-	expand_stage_selection
-	preflight_tools stage || return 1
-	preflight_selected_install || return 1
-	stage_before_last || return 1
-	collect_fragments || return 1
-	retain_selected
-	recurse install || return 1
+	cmd_install || return 1
 
 	# DESTDIR proves filesystem installation in isolation. Synchronization acts
 	# on live tools or state and therefore has no staged meaning.
@@ -711,8 +682,34 @@ env_option=
 first_option=
 last_option=
 
+# Table options, accepted before or after the verb. Sets consumed to the
+# number of arguments used. A later --first or --last replaces an earlier.
+table_option() {
+	consumed=1
+	case $1 in
+		--env)
+			[ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			env_option=$2
+			consumed=2
+			;;
+		--env=*)
+			env_option=${1#--env=}
+			[ -n "$env_option" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
+			;;
+		--first | --last)
+			[ "$#" -ge 2 ] || { printf 'home: %s requires a module list\n' "$1" >&2; exit 2; }
+			eval "${1#--}_option==\$2"
+			consumed=2
+			;;
+		--first=* | --last=*)
+			option=${1%%=*}
+			eval "${option#--}_option==\${1#*=}"
+			;;
+	esac
+}
+
 # Collection options may precede the verb, so a wrapper can fix policy and
-# still pass any verb through. A later --first or --last replaces an earlier.
+# still pass any verb through.
 while [ $# -gt 0 ]; do
 	case $1 in
 		--root)
@@ -723,23 +720,9 @@ while [ $# -gt 0 ]; do
 			root_option=$2
 			shift
 			;;
-		--env)
-			[ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
-			env_option=$2
-			shift
-			;;
-		--env=*)
-			env_option=${1#--env=}
-			[ -n "$env_option" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
-			;;
-		--first | --last)
-			[ "$#" -ge 2 ] || { printf 'home: %s requires a module list\n' "$1" >&2; exit 2; }
-			eval "${1#--}_option==\$2"
-			shift
-			;;
-		--first=* | --last=*)
-			option=${1%%=*}
-			eval "${option#--}_option==\${1#*=}"
+		--env | --env=* | --first | --first=* | --last | --last=*)
+			table_option "$@"
+			shift $((consumed - 1))
 			;;
 		*)
 			break
@@ -769,23 +752,9 @@ while [ $# -gt 0 ]; do
 		--dry-run)
 			dry_run=yes
 			;;
-		--env)
-			[ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
-			env_option=$2
-			shift
-			;;
-		--env=*)
-			env_option=${1#--env=}
-			[ -n "$env_option" ] || { printf 'home: --env requires a file\n' >&2; exit 2; }
-			;;
-		--first | --last)
-			[ "$#" -ge 2 ] || { printf 'home: %s requires a module list\n' "$1" >&2; exit 2; }
-			eval "${1#--}_option==\$2"
-			shift
-			;;
-		--first=* | --last=*)
-			option=${1%%=*}
-			eval "${option#--}_option==\${1#*=}"
+		--env | --env=* | --first | --first=* | --last | --last=*)
+			table_option "$@"
+			shift $((consumed - 1))
 			;;
 		--destdir)
 			shift

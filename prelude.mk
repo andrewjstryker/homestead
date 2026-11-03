@@ -70,4 +70,8 @@ LIBEXEC_DIR     ?= ${HOME}/.local/libexec
 
 homestead_root_vars := \
   XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME BIN_DIR LIBEXEC_DIR
+
+# An empty root would write beneath /; so would an empty HOME behind a default.
+require_nonempty = $(if $(strip $($1)),,$(error $1 must not be empty))
+$(foreach v,HOME ${homestead_root_vars},$(call require_nonempty,$v))
 endif
