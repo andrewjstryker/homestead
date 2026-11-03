@@ -45,12 +45,9 @@ endef
 
 # Environment -----------------------------------------------------------------
 
-# The roots and their defaults come from prelude.mk.
+# The roots, their defaults, and their nonempty check come from prelude.mk.
 required_inputs ?=
 path_vars := ${homestead_root_vars}
-
-require_nonempty = $(if $(strip $($1)),,$(error $1 must not be empty))
-$(foreach v,HOME ${path_vars},$(call require_nonempty,$v))
 
 export ${path_vars} ${required_inputs}
 
